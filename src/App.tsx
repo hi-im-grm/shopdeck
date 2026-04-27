@@ -2,6 +2,9 @@ import { Routes, Route } from "react-router-dom";
 import { AppLayout } from "@/components/layout/AppLayout";
 import { Dashboard } from "@/pages/Dashboard";
 import { Customers } from "@/pages/Customers";
+import { CustomerDetail } from "@/pages/CustomerDetail";
+import { Products } from "@/pages/Products";
+import { Compare } from "@/pages/Compare";
 import { Stub } from "@/pages/Stub";
 
 export default function App() {
@@ -10,30 +13,15 @@ export default function App() {
       <Route element={<AppLayout />}>
         <Route index element={<Dashboard />} />
         <Route path="customers" element={<Customers />} />
-        <Route
-          path="products"
-          element={
-            <Stub
-              title="Produkty"
-              hint={`Tabela produktów: nazwa, SKU, cena (price_cents), kategoria, zdjęcie (data URL), atrybuty (JSON).\nPodejrzyj wzorzec w pages/Customers.tsx — to ten sam schemat: select * + dialog z formularzem.`}
-            />
-          }
-        />
-        <Route
-          path="compare"
-          element={
-            <Stub
-              title="Porównaj produkty"
-              hint={`Wybierz 2–3 produkty i pokaż je obok siebie.\nPomysł: multi-select w sidebar/sheet, potem grid 3-kolumnowy z polami z attributes_json (parsowanymi).`}
-            />
-          }
-        />
+        <Route path="customers/:id" element={<CustomerDetail />} />
+        <Route path="products" element={<Products />} />
+        <Route path="compare" element={<Compare />} />
         <Route
           path="todos"
           element={
             <Stub
               title="Todo"
-              hint={`Lista zadań z opcjonalnym powiązaniem do klienta (customer_id).\nPole 'done' jako 0/1 w SQLite, 'position' do drag&drop (np. dnd-kit).`}
+              hint={`Lista zadań z opcjonalnym powiązaniem do klienta i/lub produktu.\nSchema gotowa: tabela 'todos' w db.ts ma customer_id i product_id.\nZacznij od skopiowania wzorca z pages/Customers.tsx — to ten sam SELECT/INSERT/UPDATE.`}
             />
           }
         />
@@ -42,7 +30,7 @@ export default function App() {
           element={
             <Stub
               title="Notatki"
-              hint={`Tytuł + body w markdown.\nMożesz dodać react-markdown do renderu (offline jest w node_modules).`}
+              hint={`Tytuł + body w markdown, opcjonalnie przypięte do klienta/produktu/interakcji.\nSchema 'notes' ma linked_entity_type ('customer' | 'product' | 'interaction') + linked_entity_id.\nZainstaluj 'react-markdown' (offline w node_modules) do renderu.`}
             />
           }
         />

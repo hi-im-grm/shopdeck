@@ -1,19 +1,30 @@
 # shopdeck
 
-Lokalna, offline-first aplikacja desktopowa dla małych biznesów e-commerce.
-Klienci, produkty, porównywarka, zadania i notatki — wszystko trzymane w
-SQLite na Twoim komputerze.
+Lokalna, offline-first aplikacja desktopowa dla **sprzedawcy automatyki bramowej**.
+Personal knowledge base z napędami (specyfikacja + zalety/wady + zdjęcia),
+historia kontaktów z klientami z notatkami i porównywarka napędów do
+polecania klientom przez telefon. Dane lokalne (SQLite), kod open source.
 
-> Projekt zbudowany jako test workflowu offline (Ollama + Dash + Tauri).
+> Projekt powstał jako test workflowu offline (Ollama + Dash + Tauri) i
+> portfolio piece pokazujące, że bezpieczeństwo i prywatność klientów można
+> zachować nie wysyłając danych do chmury.
 
 ## Funkcje
 
-- **Klienci** — pełen CRUD (dodawanie, edycja, usuwanie), tabela.
-- **Produkty** — katalog z atrybutami JSON, miniaturami i SKU. *(do zbudowania)*
-- **Porównywarka** — side-by-side dwóch lub trzech produktów. *(do zbudowania)*
-- **Todo** — lista zadań powiązana z klientami. *(do zbudowania)*
-- **Notatki** — markdown, linkowane do encji. *(do zbudowania)*
-- **Dashboard** — liczniki z prawdziwych zapytań SQL.
+- **Klienci** (B2C i B2B) — CRUD z polami firma/NIP/adres, wyszukiwanie.
+- **Profil klienta** — historia kontaktów (rozmowy, emaile, spotkania) ze
+  statusem otwarte/zakończone — szybki notatnik gdy klient dzwoni a ty jesteś
+  zajęty.
+- **Produkty (napędy)** — strukturalne pola dla typu, masy skrzydła, długości,
+  mocy, zasilania, IP, duty cycle. Zalety i wady. Zdjęcia przez data URL/URL.
+- **Filtry/recommender** — wpisujesz "skrzydłowy, do 300kg, max 2000zł" →
+  widzisz pasujące napędy.
+- **Porównywarka** — wybierasz 2+ produkty, side-by-side z auto-highlightem
+  różnic (zielony Trophy dla najlepszych parametrów).
+- **Tryb ciemny** — z respektem dla preferencji systemu, zapisywany w
+  localStorage.
+- **Seed data** — 8 sztucznych napędów żeby od razu mieć z czym popracować.
+- **Todo + Notatki** — schemat gotowy, UI do dorobienia.
 
 ## Stack
 

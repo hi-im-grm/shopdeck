@@ -9,6 +9,7 @@ import {
   Store,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const items = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
@@ -46,9 +47,13 @@ export function Sidebar() {
           </NavLink>
         ))}
       </nav>
-      <div className="p-3 border-t text-xs text-muted-foreground">
-        offline-first · v0.1.0
+      <div className="p-3 border-t space-y-2">
+        <ThemeToggle />
+        <p className="text-xs text-muted-foreground px-3">
+          offline-first · v0.1.0
+        </p>
       </div>
     </aside>
   );
 }
+

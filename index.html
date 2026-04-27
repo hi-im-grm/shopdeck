@@ -8,6 +8,14 @@
   </head>
 
   <body>
+    <script>
+      (function () {
+        var saved = localStorage.getItem("theme");
+        var prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var theme = saved === "dark" || saved === "light" ? saved : prefersDark ? "dark" : "light";
+        if (theme === "dark") document.documentElement.classList.add("dark");
+      })();
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
