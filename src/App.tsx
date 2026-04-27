@@ -5,6 +5,7 @@ import { Customers } from "@/pages/Customers";
 import { CustomerDetail } from "@/pages/CustomerDetail";
 import { Products } from "@/pages/Products";
 import { Compare } from "@/pages/Compare";
+import { Todos } from "@/pages/Todos";
 import { Stub } from "@/pages/Stub";
 
 export default function App() {
@@ -16,15 +17,7 @@ export default function App() {
         <Route path="customers/:id" element={<CustomerDetail />} />
         <Route path="products" element={<Products />} />
         <Route path="compare" element={<Compare />} />
-        <Route
-          path="todos"
-          element={
-            <Stub
-              title="Todo"
-              hint={`Lista zadań z opcjonalnym powiązaniem do klienta i/lub produktu.\nSchema gotowa: tabela 'todos' w db.ts ma customer_id i product_id.\nZacznij od skopiowania wzorca z pages/Customers.tsx — to ten sam SELECT/INSERT/UPDATE.`}
-            />
-          }
-        />
+        <Route path="todos" element={<Todos />} />
         <Route
           path="notes"
           element={
