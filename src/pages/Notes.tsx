@@ -32,9 +32,8 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Plus, Pencil, Trash2, User, Package, StickyNote } from "lucide-react";
 import { toast } from "sonner";
-
-type LinkType = "customer" | "product" | "interaction" | null;
-type LinkValue = "none" | "customer" | "product";
+import { QuickCreateCustomer } from "@/components/QuickCreateCustomer";
+import { QuickCreateProduct } from "@/components/QuickCreateProduct";
 
 type NoteWithRefs = Note & {
   customer_name: string | null;
@@ -59,8 +58,8 @@ export function Notes() {
   const [filter, setFilter] = useState<Filter>("all");
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<NoteWithRefs | null>(null);
-  const [linkKind, setLinkKind] = useState<LinkValue>("none");
-  const [linkId, setLinkId] = useState<string>("");
+  const [customerSel, setCustomerSel] = useState<string>("none");
+  const [productSel, setProductSel] = useState<string>("none");
   const [previewOf, setPreviewOf] = useState<NoteWithRefs | null>(null);
 
   async function refresh() {
@@ -71,13 +70,23 @@ export function Notes() {
                 c.name as customer_name,
                 p.name as product_name
          FROM notes n
-         LEFT JOIN customers c
-           ON n.linked_entity_type = 'customer' AND c.id = n.linked_entity_id
-         LEFT JOIN products p
-           ON n.linked_entity_type = 'product' AND p.id = n.linked_entity_id
+         LEFT JOIN customers c ON c.id = n.customer_id
+         LEFT JOIN products p ON p.id = n.product_id
          ORDER BY n.updated_at DESC`,
       ),
     );
+    setCustomers(
+      await conn.select<Customer[]>("SELECT * FROM customers ORDER BY name"),
+    );
+    setProducts(
+      await conn.select<Product[]>(
+        "SELECT * FROM products ORDER BY manufacturer, name",
+      ),
+    );
+  }
+
+  async function refreshLists() {
+    const conn = await db();
     setCustomers(
       await conn.select<Customer[]>("SELECT * FROM customers ORDER BY name"),
     );
@@ -94,19 +103,12 @@ export function Notes() {
 
   useEffect(() => {
     if (open) {
-      if (editing) {
-        const t = (editing.linked_entity_type as LinkType) ?? null;
-        if (t === "customer" || t === "product") {
-          setLinkKind(t);
-          setLinkId(String(editing.linked_entity_id ?? ""));
-        } else {
-          setLinkKind("none");
-          setLinkId("");
-        }
-      } else {
-        setLinkKind("none");
-        setLinkId("");
-      }
+      setCustomerSel(
+        editing?.customer_id ? String(editing.customer_id) : "none",
+      );
+      setProductSel(
+        editing?.product_id ? String(editing.product_id) : "none",
+      );
     }
   }, [open, editing]);
 
@@ -116,26 +118,24 @@ export function Notes() {
     const title = String(fd.get("title") ?? "").trim() || null;
     const body_md = String(fd.get("body_md") ?? "");
 
-    const linked_entity_type: LinkType =
-      linkKind === "none" ? null : linkKind;
-    const linked_entity_id =
-      linkKind !== "none" && linkId ? Number(linkId) : null;
+    const customer_id = customerSel === "none" ? null : Number(customerSel);
+    const product_id = productSel === "none" ? null : Number(productSel);
 
     const conn = await db();
     if (editing) {
       await conn.execute(
         `UPDATE notes
-         SET title=?, body_md=?, linked_entity_type=?, linked_entity_id=?,
+         SET title=?, body_md=?, customer_id=?, product_id=?,
              updated_at=unixepoch()
          WHERE id=?`,
-        [title, body_md, linked_entity_type, linked_entity_id, editing.id],
+        [title, body_md, customer_id, product_id, editing.id],
       );
       toast.success("Notatka zaktualizowana");
     } else {
       await conn.execute(
-        `INSERT INTO notes (title, body_md, linked_entity_type, linked_entity_id)
+        `INSERT INTO notes (title, body_md, customer_id, product_id)
          VALUES (?, ?, ?, ?)`,
-        [title, body_md, linked_entity_type, linked_entity_id],
+        [title, body_md, customer_id, product_id],
       );
       toast.success("Notatka dodana");
     }
@@ -156,11 +156,9 @@ export function Notes() {
   const filtered = useMemo(() => {
     const s = search.toLowerCase();
     return rows.filter((n) => {
-      if (filter === "free" && n.linked_entity_type !== null) return false;
-      if (filter === "customer" && n.linked_entity_type !== "customer")
-        return false;
-      if (filter === "product" && n.linked_entity_type !== "product")
-        return false;
+      if (filter === "free" && (n.customer_id || n.product_id)) return false;
+      if (filter === "customer" && !n.customer_id) return false;
+      if (filter === "product" && !n.product_id) return false;
       if (s) {
         const hay = [n.title, n.body_md, n.customer_name, n.product_name]
           .filter(Boolean)
@@ -175,23 +173,21 @@ export function Notes() {
   const counts = useMemo(
     () => ({
       all: rows.length,
-      free: rows.filter((n) => n.linked_entity_type === null).length,
-      customer: rows.filter((n) => n.linked_entity_type === "customer").length,
-      product: rows.filter((n) => n.linked_entity_type === "product").length,
+      free: rows.filter((n) => !n.customer_id && !n.product_id).length,
+      customer: rows.filter((n) => n.customer_id !== null).length,
+      product: rows.filter((n) => n.product_id !== null).length,
     }),
     [rows],
   );
-
-  const dialogOpen = open;
 
   return (
     <>
       <PageHeader
         title="Notatki"
-        description="Markdown. Możesz przypiąć do klienta lub produktu."
+        description="Markdown. Możesz przypiąć do klienta i/lub produktu."
         action={
           <Dialog
-            open={dialogOpen}
+            open={open}
             onOpenChange={(o) => {
               setOpen(o);
               if (!o) setEditing(null);
@@ -211,7 +207,8 @@ export function Notes() {
                   </DialogTitle>
                   <DialogDescription>
                     Body wspiera markdown — listy, nagłówki, **pogrubienie**,
-                    `kod`.
+                    `kod`. Możesz przypiąć notatkę do klienta i produktu
+                    jednocześnie.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="grid gap-4 py-4">
@@ -224,58 +221,92 @@ export function Notes() {
                       placeholder="np. Pomysły na promocję napędów"
                     />
                   </div>
+
                   <div className="grid grid-cols-2 gap-3">
                     <div className="grid gap-2">
-                      <Label>Powiąż z</Label>
-                      <Select
-                        value={linkKind}
-                        onValueChange={(v) => {
-                          setLinkKind(v as LinkValue);
-                          setLinkId("");
-                        }}
-                      >
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">— niezależna —</SelectItem>
-                          <SelectItem value="customer">Klient</SelectItem>
-                          <SelectItem value="product">Produkt</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label>Wybierz</Label>
-                      <Select
-                        value={linkId}
-                        onValueChange={setLinkId}
-                        disabled={linkKind === "none"}
-                      >
-                        <SelectTrigger>
-                          <SelectValue
-                            placeholder={
-                              linkKind === "none" ? "—" : "Wybierz"
-                            }
-                          />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {linkKind === "customer" &&
-                            customers.map((c) => (
+                      <Label className="flex items-center gap-1">
+                        <User className="h-3.5 w-3.5" />
+                        Klient
+                      </Label>
+                      <div className="flex gap-2">
+                        <Select
+                          value={customerSel}
+                          onValueChange={setCustomerSel}
+                        >
+                          <SelectTrigger className="flex-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— brak —</SelectItem>
+                            {customers.map((c) => (
                               <SelectItem key={c.id} value={String(c.id)}>
                                 {c.name}
                                 {c.company ? ` (${c.company})` : ""}
                               </SelectItem>
                             ))}
-                          {linkKind === "product" &&
-                            products.map((p) => (
+                          </SelectContent>
+                        </Select>
+                        <QuickCreateCustomer
+                          trigger={
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              title="Dodaj nowego klienta"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          }
+                          onCreated={async (id) => {
+                            await refreshLists();
+                            setCustomerSel(String(id));
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid gap-2">
+                      <Label className="flex items-center gap-1">
+                        <Package className="h-3.5 w-3.5" />
+                        Produkt
+                      </Label>
+                      <div className="flex gap-2">
+                        <Select
+                          value={productSel}
+                          onValueChange={setProductSel}
+                        >
+                          <SelectTrigger className="flex-1">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none">— brak —</SelectItem>
+                            {products.map((p) => (
                               <SelectItem key={p.id} value={String(p.id)}>
                                 {p.name}
                               </SelectItem>
                             ))}
-                        </SelectContent>
-                      </Select>
+                          </SelectContent>
+                        </Select>
+                        <QuickCreateProduct
+                          trigger={
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="icon"
+                              title="Dodaj nowy produkt"
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          }
+                          onCreated={async (id) => {
+                            await refreshLists();
+                            setProductSel(String(id));
+                          }}
+                        />
+                      </div>
                     </div>
                   </div>
+
                   <div className="grid gap-2">
                     <Label htmlFor="body_md">Treść (markdown)</Label>
                     <Textarea
@@ -334,12 +365,10 @@ export function Notes() {
                 onClick={() => setPreviewOf(n)}
               >
                 <CardContent className="p-4 space-y-2 flex-1 flex flex-col">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <StickyNote className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <div className="font-semibold leading-tight">
-                        {n.title || "(bez tytułu)"}
-                      </div>
+                  <div className="flex items-start gap-2">
+                    <StickyNote className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
+                    <div className="font-semibold leading-tight">
+                      {n.title || "(bez tytułu)"}
                     </div>
                   </div>
                   <div className="text-xs text-muted-foreground line-clamp-4 whitespace-pre-line flex-1">
@@ -383,11 +412,20 @@ export function Notes() {
                 <DialogTitle>
                   {previewOf.title || "(bez tytułu)"}
                 </DialogTitle>
-                <DialogDescription>
-                  Aktualizacja: {formatDate(previewOf.updated_at)}
-                  {previewOf.customer_name &&
-                    ` · ${previewOf.customer_name}`}
-                  {previewOf.product_name && ` · ${previewOf.product_name}`}
+                <DialogDescription className="flex flex-wrap gap-2 items-center">
+                  <span>Aktualizacja: {formatDate(previewOf.updated_at)}</span>
+                  {previewOf.customer_name && (
+                    <Badge variant="secondary">
+                      <User className="h-3 w-3 mr-1" />
+                      {previewOf.customer_name}
+                    </Badge>
+                  )}
+                  {previewOf.product_name && (
+                    <Badge variant="secondary">
+                      <Package className="h-3 w-3 mr-1" />
+                      {previewOf.product_name}
+                    </Badge>
+                  )}
                 </DialogDescription>
               </DialogHeader>
               <div className="prose prose-sm dark:prose-invert max-w-none py-2">
