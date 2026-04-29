@@ -364,12 +364,24 @@ export function Notes() {
                 className="cursor-pointer hover:bg-muted/30 transition-colors h-full flex flex-col"
                 onClick={() => setPreviewOf(n)}
               >
-                <CardContent className="p-4 space-y-2 flex-1 flex flex-col">
+                <CardContent className="p-4 space-y-2 flex-1 flex flex-col group">
                   <div className="flex items-start gap-2">
                     <StickyNote className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                    <div className="font-semibold leading-tight">
+                    <div className="font-semibold leading-tight flex-1">
                       {n.title || "(bez tytułu)"}
                     </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 -mt-1 -mr-1"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        remove(n.id);
+                      }}
+                      title="Usuń notatkę"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
                   <div className="text-xs text-muted-foreground line-clamp-4 whitespace-pre-line flex-1">
                     {n.body_md || "(pusta)"}
