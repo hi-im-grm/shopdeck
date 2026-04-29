@@ -3,7 +3,6 @@ import {
   LayoutDashboard,
   Users,
   Package,
-  GitCompare,
   ListTodo,
   StickyNote,
   Store,
@@ -15,7 +14,6 @@ const items = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/customers", label: "Klienci", icon: Users },
   { to: "/products", label: "Produkty", icon: Package },
-  { to: "/compare", label: "Porównaj", icon: GitCompare },
   { to: "/todos", label: "Todo", icon: ListTodo },
   { to: "/notes", label: "Notatki", icon: StickyNote },
 ];
