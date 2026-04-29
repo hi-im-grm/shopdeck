@@ -145,12 +145,45 @@ export function Notes() {
   }
 
   async function remove(id: number) {
-    if (!window.confirm("Usunąć notatkę?")) return;
     const conn = await db();
+    const [snapshot] = await conn.select<Note[]>(
+      "SELECT * FROM notes WHERE id = ?",
+      [id],
+    );
+    if (!snapshot) return;
+
     await conn.execute("DELETE FROM notes WHERE id=?", [id]);
-    toast.success("Notatka usunięta");
     setPreviewOf(null);
     await refresh();
+
+    toast.success("Notatka usunięta", {
+      duration: 6000,
+      action: {
+        label: "Cofnij",
+        onClick: async () => {
+          const c = await db();
+          await c.execute(
+            `INSERT INTO notes
+              (id, title, body_md, linked_entity_type, linked_entity_id,
+               customer_id, product_id, created_at, updated_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              snapshot.id,
+              snapshot.title,
+              snapshot.body_md,
+              snapshot.linked_entity_type,
+              snapshot.linked_entity_id,
+              snapshot.customer_id,
+              snapshot.product_id,
+              snapshot.created_at,
+              snapshot.updated_at,
+            ],
+          );
+          toast.success("Cofnięto usuwanie");
+          await refresh();
+        },
+      },
+    });
   }
 
   const filtered = useMemo(() => {
