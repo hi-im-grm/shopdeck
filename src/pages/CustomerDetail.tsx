@@ -31,6 +31,12 @@ import {
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
+  Tabs,
+  TabsList,
+  TabsTrigger,
+  TabsContent,
+} from "@/components/ui/tabs";
+import {
   Phone,
   Mail,
   MessageSquare,
@@ -43,6 +49,8 @@ import {
   Circle,
 } from "lucide-react";
 import { toast } from "sonner";
+import { LinkedNotes } from "@/components/LinkedNotes";
+import { LinkedTodos } from "@/components/LinkedTodos";
 
 const KIND_ICONS: Record<InteractionKind, React.ComponentType<{ className?: string }>> = {
   call: Phone,
@@ -153,77 +161,6 @@ export function CustomerDetail() {
                 Wróć
               </Link>
             </Button>
-            <Dialog open={open} onOpenChange={setOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="h-4 w-4" />
-                  Nowa interakcja
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <form onSubmit={addInteraction}>
-                  <DialogHeader>
-                    <DialogTitle>Nowa interakcja</DialogTitle>
-                    <DialogDescription>
-                      Szybki zapis: kto, o czym, kiedy.
-                    </DialogDescription>
-                  </DialogHeader>
-                  <div className="grid gap-4 py-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="grid gap-2">
-                        <Label htmlFor="kind">Rodzaj</Label>
-                        <Select name="kind" defaultValue="call">
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {(
-                              Object.keys(
-                                INTERACTION_KIND_LABELS,
-                              ) as InteractionKind[]
-                            ).map((k) => (
-                              <SelectItem key={k} value={k}>
-                                {INTERACTION_KIND_LABELS[k]}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="grid gap-2">
-                        <Label htmlFor="status">Status</Label>
-                        <Select name="status" defaultValue="open">
-                          <SelectTrigger>
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="open">
-                              Otwarte (do zrobienia)
-                            </SelectItem>
-                            <SelectItem value="done">Zakończone</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="summary">O czym (krótko)</Label>
-                      <Input
-                        id="summary"
-                        name="summary"
-                        required
-                        placeholder="np. Pyta o napęd skrzydłowy do 300kg"
-                      />
-                    </div>
-                    <div className="grid gap-2">
-                      <Label htmlFor="body_md">Notatka (więcej szczegółów)</Label>
-                      <Textarea id="body_md" name="body_md" rows={5} />
-                    </div>
-                  </div>
-                  <DialogFooter>
-                    <Button type="submit">Zapisz</Button>
-                  </DialogFooter>
-                </form>
-              </DialogContent>
-            </Dialog>
           </div>
         }
       />
@@ -245,13 +182,23 @@ export function CustomerDetail() {
             {customer.email && (
               <div>
                 <Label className="text-xs text-muted-foreground">Email</Label>
-                <div className="text-sm">{customer.email}</div>
+                <a
+                  href={`mailto:${customer.email}`}
+                  className="text-sm block hover:underline"
+                >
+                  {customer.email}
+                </a>
               </div>
             )}
             {customer.phone && (
               <div>
                 <Label className="text-xs text-muted-foreground">Telefon</Label>
-                <div className="text-sm">{customer.phone}</div>
+                <a
+                  href={`tel:${customer.phone.replace(/\s/g, "")}`}
+                  className="text-sm block hover:underline"
+                >
+                  {customer.phone}
+                </a>
               </div>
             )}
             {customer.nip && (
@@ -268,7 +215,7 @@ export function CustomerDetail() {
             )}
             {customer.notes && (
               <div>
-                <Label className="text-xs text-muted-foreground">Notatki</Label>
+                <Label className="text-xs text-muted-foreground">Notatki (z karty klienta)</Label>
                 <div className="text-sm whitespace-pre-line">
                   {customer.notes}
                 </div>
@@ -277,76 +224,170 @@ export function CustomerDetail() {
           </CardContent>
         </Card>
 
-        {/* Interactions timeline */}
-        <div className="lg:col-span-2 space-y-3">
-          <h2 className="font-semibold flex items-center gap-2">
-            <Phone className="h-4 w-4" />
-            Historia kontaktów ({interactions.length})
-          </h2>
-          {interactions.length === 0 ? (
-            <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground text-sm">
-              Brak interakcji. Dodaj pierwszą klikając „Nowa interakcja”.
-            </div>
-          ) : (
-            interactions.map((i) => {
-              const Icon = KIND_ICONS[i.kind];
-              return (
-                <Card key={i.id}>
-                  <CardContent className="p-4 flex gap-3">
-                    <div className="shrink-0">
-                      <button
-                        onClick={() => toggleStatus(i)}
-                        className="p-1 hover:bg-muted rounded transition-colors"
-                        title={
-                          i.status === "open"
-                            ? "Oznacz jako zakończone"
-                            : "Oznacz jako otwarte"
-                        }
-                      >
-                        {i.status === "done" ? (
-                          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
-                        ) : (
-                          <Circle className="h-5 w-5 text-muted-foreground" />
-                        )}
-                      </button>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Icon className="h-3.5 w-3.5" />
-                          <span>{INTERACTION_KIND_LABELS[i.kind]}</span>
-                          <span>·</span>
-                          <span>{formatDate(i.created_at)}</span>
+        {/* Tabs: Interactions / Notes / Todos */}
+        <div className="lg:col-span-2">
+          <Tabs defaultValue="interactions">
+            <TabsList>
+              <TabsTrigger value="interactions">
+                Historia kontaktów ({interactions.length})
+              </TabsTrigger>
+              <TabsTrigger value="notes">Notatki</TabsTrigger>
+              <TabsTrigger value="todos">Todo</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="interactions" className="space-y-3 mt-4">
+              <div className="flex justify-end">
+                <Dialog open={open} onOpenChange={setOpen}>
+                  <DialogTrigger asChild>
+                    <Button size="sm" variant="outline">
+                      <Plus className="h-4 w-4" />
+                      Nowa interakcja
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <form onSubmit={addInteraction}>
+                      <DialogHeader>
+                        <DialogTitle>Nowa interakcja</DialogTitle>
+                        <DialogDescription>
+                          Szybki zapis: kto, o czym, kiedy.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="grid gap-4 py-4">
+                        <div className="grid grid-cols-2 gap-3">
+                          <div className="grid gap-2">
+                            <Label htmlFor="kind">Rodzaj</Label>
+                            <Select name="kind" defaultValue="call">
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {(
+                                  Object.keys(
+                                    INTERACTION_KIND_LABELS,
+                                  ) as InteractionKind[]
+                                ).map((k) => (
+                                  <SelectItem key={k} value={k}>
+                                    {INTERACTION_KIND_LABELS[k]}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="grid gap-2">
+                            <Label htmlFor="status">Status</Label>
+                            <Select name="status" defaultValue="open">
+                              <SelectTrigger>
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="open">
+                                  Otwarte (do zrobienia)
+                                </SelectItem>
+                                <SelectItem value="done">
+                                  Zakończone
+                                </SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </div>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6"
-                          onClick={() => removeInteraction(i.id)}
-                        >
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                      <div
-                        className={
-                          i.status === "done"
-                            ? "font-medium mt-1 line-through text-muted-foreground"
-                            : "font-medium mt-1"
-                        }
-                      >
-                        {i.summary}
-                      </div>
-                      {i.body_md && (
-                        <div className="text-sm text-muted-foreground mt-1 whitespace-pre-line">
-                          {i.body_md}
+                        <div className="grid gap-2">
+                          <Label htmlFor="summary">O czym (krótko)</Label>
+                          <Input
+                            id="summary"
+                            name="summary"
+                            required
+                            placeholder="np. Pyta o napęd skrzydłowy do 300kg"
+                          />
                         </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            })
-          )}
+                        <div className="grid gap-2">
+                          <Label htmlFor="body_md">
+                            Notatka (więcej szczegółów)
+                          </Label>
+                          <Textarea id="body_md" name="body_md" rows={5} />
+                        </div>
+                      </div>
+                      <DialogFooter>
+                        <Button type="submit">Zapisz</Button>
+                      </DialogFooter>
+                    </form>
+                  </DialogContent>
+                </Dialog>
+              </div>
+
+              {interactions.length === 0 ? (
+                <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground text-sm">
+                  Brak interakcji. Dodaj pierwszą klikając „Nowa interakcja”.
+                </div>
+              ) : (
+                interactions.map((i) => {
+                  const Icon = KIND_ICONS[i.kind];
+                  return (
+                    <Card key={i.id}>
+                      <CardContent className="p-4 flex gap-3">
+                        <div className="shrink-0">
+                          <button
+                            onClick={() => toggleStatus(i)}
+                            className="p-1 hover:bg-muted rounded transition-colors"
+                            title={
+                              i.status === "open"
+                                ? "Oznacz jako zakończone"
+                                : "Oznacz jako otwarte"
+                            }
+                          >
+                            {i.status === "done" ? (
+                              <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                            ) : (
+                              <Circle className="h-5 w-5 text-muted-foreground" />
+                            )}
+                          </button>
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                              <Icon className="h-3.5 w-3.5" />
+                              <span>{INTERACTION_KIND_LABELS[i.kind]}</span>
+                              <span>·</span>
+                              <span>{formatDate(i.created_at)}</span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6"
+                              onClick={() => removeInteraction(i.id)}
+                            >
+                              <Trash2 className="h-3 w-3" />
+                            </Button>
+                          </div>
+                          <div
+                            className={
+                              i.status === "done"
+                                ? "font-medium mt-1 line-through text-muted-foreground"
+                                : "font-medium mt-1"
+                            }
+                          >
+                            {i.summary}
+                          </div>
+                          {i.body_md && (
+                            <div className="text-sm text-muted-foreground mt-1 whitespace-pre-line">
+                              {i.body_md}
+                            </div>
+                          )}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })
+              )}
+            </TabsContent>
+
+            <TabsContent value="notes" className="mt-4">
+              <LinkedNotes entityType="customer" entityId={customer.id} />
+            </TabsContent>
+
+            <TabsContent value="todos" className="mt-4">
+              <LinkedTodos entityType="customer" entityId={customer.id} />
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </>

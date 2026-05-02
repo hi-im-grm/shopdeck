@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import {
   db,
   type Product,
@@ -322,9 +322,12 @@ export function Products() {
                         className="mt-1"
                       />
                       <div>
-                        <div className="font-semibold leading-tight">
+                        <Link
+                          to={`/products/${p.id}`}
+                          className="font-semibold leading-tight hover:underline"
+                        >
                           {p.name}
-                        </div>
+                        </Link>
                         {p.manufacturer && (
                           <div className="text-xs text-muted-foreground">
                             {p.manufacturer}
