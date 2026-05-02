@@ -38,15 +38,22 @@ const PRESETS = [
   "Sellasist",
   "Producent",
   "Allegro",
-  "Allegro Smart",
-  "OLX",
+  "Amazon",
+  "eMAG",
+  "eBay",
   "Strona oferty",
   "Inne",
 ] as const;
 
 function iconForLabel(label: string) {
   const l = label.toLowerCase();
-  if (l.includes("sellasist") || l.includes("allegro") || l.includes("olx"))
+  if (
+    l.includes("sellasist") ||
+    l.includes("allegro") ||
+    l.includes("amazon") ||
+    l.includes("emag") ||
+    l.includes("ebay")
+  )
     return ShoppingCart;
   if (l.includes("producent") || l.includes("manufacturer")) return Factory;
   if (l.includes("oferta") || l.includes("strona oferty")) return Package;
