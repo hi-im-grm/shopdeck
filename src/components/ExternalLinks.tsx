@@ -41,6 +41,7 @@ const PRESETS = [
   "Amazon",
   "eMAG",
   "eBay",
+  "Erli",
   "Strona oferty",
   "Inne",
 ] as const;
@@ -52,7 +53,8 @@ function iconForLabel(label: string) {
     l.includes("allegro") ||
     l.includes("amazon") ||
     l.includes("emag") ||
-    l.includes("ebay")
+    l.includes("ebay") ||
+    l.includes("erli")
   )
     return ShoppingCart;
   if (l.includes("producent") || l.includes("manufacturer")) return Factory;
