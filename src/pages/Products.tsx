@@ -3,11 +3,15 @@ import { useNavigate, Link } from "react-router-dom";
 import {
   db,
   type Product,
+  type ProductAttribute,
   type DriveType,
   DRIVE_TYPE_LABELS,
   formatPLN,
   parsePLN,
+  parseProductAttributes,
+  stringifyProductAttributes,
 } from "@/lib/db";
+import { AttributesEditor } from "@/components/AttributesEditor";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -41,8 +45,13 @@ import {
   Ruler,
   Zap,
   GitCompare,
+  Download,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
+import { toCSV, downloadCSV, parseCSV, unixToISO } from "@/lib/csv";
+import { logChange, logDelete } from "@/lib/audit";
+import { recordWriteForBackup } from "@/lib/autobackup";
 
 const DRIVE_TYPES: DriveType[] = [
   "skrzydlowy",
@@ -66,6 +75,16 @@ export function Products() {
   const [maxPrice, setMaxPrice] = useState("");
 
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [attributes, setAttributes] = useState<ProductAttribute[]>([]);
+
+  // Sync attribute editor state when opening dialog for edit/new.
+  useEffect(() => {
+    if (open) {
+      setAttributes(
+        editing ? parseProductAttributes(editing.attributes_json) : [],
+      );
+    }
+  }, [open, editing]);
 
   async function refresh() {
     const conn = await db();
@@ -91,67 +110,114 @@ export function Products() {
     const model = String(fd.get("model") ?? "") || null;
     const sku = String(fd.get("sku") ?? "") || null;
     const type = (fd.get("type") as DriveType) || null;
-    const max_weight_kg = Number(fd.get("max_weight_kg")) || null;
-    const max_length_m = Number(fd.get("max_length_m")) || null;
-    const power_w = Number(fd.get("power_w")) || null;
-    const voltage = String(fd.get("voltage") ?? "") || null;
-    const duty_cycle = String(fd.get("duty_cycle") ?? "") || null;
-    const ip_rating = String(fd.get("ip_rating") ?? "") || null;
     const price_cents = parsePLN(String(fd.get("price") ?? "0"));
     const pros = String(fd.get("pros") ?? "") || null;
     const cons = String(fd.get("cons") ?? "") || null;
     const description = String(fd.get("description") ?? "") || null;
     const image_data_url = String(fd.get("image_data_url") ?? "") || null;
     const notes = String(fd.get("notes") ?? "") || null;
+    const attributes_json = stringifyProductAttributes(attributes);
 
     const conn = await db();
+    let savedId: number;
     if (editing) {
+      const [before] = await conn.select<Product[]>(
+        "SELECT * FROM products WHERE id=?",
+        [editing.id],
+      );
+      // Log price change BEFORE the update so we capture the old value.
+      if (editing.price_cents !== price_cents) {
+        await conn.execute(
+          "INSERT INTO product_price_history (product_id, old_price_cents, new_price_cents) VALUES (?, ?, ?)",
+          [editing.id, editing.price_cents, price_cents],
+        );
+      }
+      // NOTE: technical spec columns (max_weight_kg/max_length_m/power_w/
+       // voltage/duty_cycle/ip_rating) are intentionally NOT in this UPDATE.
+       // Form no longer edits them — values stay as-is for legacy/seeded
+       // products. New custom attributes go through attributes_json.
       await conn.execute(
         `UPDATE products SET
           name=?, manufacturer=?, model=?, sku=?, type=?,
-          max_weight_kg=?, max_length_m=?, power_w=?, voltage=?,
-          duty_cycle=?, ip_rating=?, price_cents=?,
+          price_cents=?,
           pros=?, cons=?, description=?, image_data_url=?, notes=?,
+          attributes_json=?,
           updated_at=unixepoch()
         WHERE id=?`,
         [
           name, manufacturer, model, sku, type,
-          max_weight_kg, max_length_m, power_w, voltage,
-          duty_cycle, ip_rating, price_cents,
+          price_cents,
           pros, cons, description, image_data_url, notes,
+          attributes_json,
           editing.id,
         ],
       );
+      const [after] = await conn.select<Product[]>(
+        "SELECT * FROM products WHERE id=?",
+        [editing.id],
+      );
+      await logChange(
+        "product",
+        editing.id,
+        before as unknown as Record<string, unknown>,
+        after as unknown as Record<string, unknown>,
+      );
+      savedId = editing.id;
       toast.success("Produkt zaktualizowany");
     } else {
-      await conn.execute(
+      // New products use only minimal core fields + dynamic attributes.
+      // Legacy spec columns default to NULL via schema.
+      const res = await conn.execute(
         `INSERT INTO products (
           name, manufacturer, model, sku, type,
-          max_weight_kg, max_length_m, power_w, voltage,
-          duty_cycle, ip_rating, price_cents,
-          pros, cons, description, image_data_url, notes
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          price_cents,
+          pros, cons, description, image_data_url, notes,
+          attributes_json
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           name, manufacturer, model, sku, type,
-          max_weight_kg, max_length_m, power_w, voltage,
-          duty_cycle, ip_rating, price_cents,
+          price_cents,
           pros, cons, description, image_data_url, notes,
+          attributes_json,
         ],
+      );
+      savedId = Number(res.lastInsertId ?? 0);
+      const [after] = await conn.select<Product[]>(
+        "SELECT * FROM products WHERE id=?",
+        [savedId],
+      );
+      await logChange(
+        "product",
+        savedId,
+        null,
+        after as unknown as Record<string, unknown>,
       );
       toast.success("Produkt dodany");
     }
+    void recordWriteForBackup();
     setOpen(false);
     setEditing(null);
     await refresh();
   }
 
-  async function remove(id: number) {
+  async function remove(p: Product) {
+    if (!window.confirm(`Usunąć produkt „${p.name}”?`)) return;
     const conn = await db();
-    await conn.execute("DELETE FROM products WHERE id=?", [id]);
+    const [snapshot] = await conn.select<Product[]>(
+      "SELECT * FROM products WHERE id=?",
+      [p.id],
+    );
+    await conn.execute("DELETE FROM products WHERE id=?", [p.id]);
+    await logDelete(
+      "product",
+      p.id,
+      snapshot as unknown as Record<string, unknown>,
+    );
+    void recordWriteForBackup();
     toast.success("Produkt usunięty");
     setSelected((s) => {
       const next = new Set(s);
-      next.delete(id);
+      next.delete(p.id);
       return next;
     });
     await refresh();
@@ -184,6 +250,128 @@ export function Products() {
     });
   }, [rows, search, filterType, minWeight, minLength, maxPrice]);
 
+  function exportCSV() {
+    if (rows.length === 0) {
+      toast.info("Brak produktów do eksportu");
+      return;
+    }
+    const csv = toCSV(rows, [
+      { header: "id", get: (p) => p.id },
+      { header: "name", get: (p) => p.name },
+      { header: "manufacturer", get: (p) => p.manufacturer },
+      { header: "model", get: (p) => p.model },
+      { header: "sku", get: (p) => p.sku },
+      { header: "type", get: (p) => p.type },
+      { header: "max_weight_kg", get: (p) => p.max_weight_kg },
+      { header: "max_length_m", get: (p) => p.max_length_m },
+      { header: "power_w", get: (p) => p.power_w },
+      { header: "voltage", get: (p) => p.voltage },
+      { header: "duty_cycle", get: (p) => p.duty_cycle },
+      { header: "ip_rating", get: (p) => p.ip_rating },
+      { header: "price_pln", get: (p) => (p.price_cents / 100).toFixed(2) },
+      { header: "currency", get: (p) => p.currency },
+      { header: "pros", get: (p) => p.pros },
+      { header: "cons", get: (p) => p.cons },
+      { header: "description", get: (p) => p.description },
+      { header: "notes", get: (p) => p.notes },
+      { header: "created_at", get: (p) => unixToISO(p.created_at) },
+    ]);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCSV(`shopdeck-produkty-${stamp}.csv`, csv);
+    toast.success(`Wyeksportowano ${rows.length} produktów`);
+  }
+
+  async function importCSVFile(file: File) {
+    const text = await file.text();
+    const parsed = parseCSV(text);
+    if (parsed.length < 2) {
+      toast.error("Plik CSV pusty lub bez nagłówka");
+      return;
+    }
+    const [header, ...dataRows] = parsed;
+    const idx = (name: string) => header.indexOf(name);
+
+    // required column
+    if (idx("name") === -1) {
+      toast.error("Brak kolumny „name” w pliku CSV");
+      return;
+    }
+    const required = dataRows.filter((r) => (r[idx("name")] ?? "").trim());
+    if (!window.confirm(`Zaimportować ${required.length} produktów z pliku?`)) {
+      return;
+    }
+
+    const conn = await db();
+    let inserted = 0;
+    let skipped = 0;
+    for (const r of required) {
+      const sku = (r[idx("sku")] ?? "").trim() || null;
+      // skip if SKU already exists
+      if (sku) {
+        const [dup] = await conn.select<{ n: number }[]>(
+          "SELECT COUNT(*) as n FROM products WHERE sku=?",
+          [sku],
+        );
+        if (dup.n > 0) {
+          skipped++;
+          continue;
+        }
+      }
+      const pickNum = (col: string) => {
+        const v = (r[idx(col)] ?? "").trim();
+        const n = parseFloat(v.replace(",", "."));
+        return Number.isFinite(n) ? n : null;
+      };
+      const pickStr = (col: string) => {
+        const i = idx(col);
+        if (i === -1) return null;
+        const v = (r[i] ?? "").trim();
+        return v || null;
+      };
+      const name = (r[idx("name")] ?? "").trim();
+      const price_cents = (() => {
+        // accept "price_pln" or "price_cents"
+        const pln = pickNum("price_pln");
+        if (pln !== null) return Math.round(pln * 100);
+        const cents = pickNum("price_cents");
+        return cents !== null ? Math.round(cents) : 0;
+      })();
+      await conn.execute(
+        `INSERT INTO products (
+           name, manufacturer, model, sku, type,
+           max_weight_kg, max_length_m, power_w, voltage,
+           duty_cycle, ip_rating, price_cents, currency,
+           pros, cons, description, notes,
+           external_links_json, attributes_json
+         ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?, '{}', '{}')`,
+        [
+          name,
+          pickStr("manufacturer"),
+          pickStr("model"),
+          sku,
+          pickStr("type"),
+          pickNum("max_weight_kg"),
+          pickNum("max_length_m"),
+          pickNum("power_w"),
+          pickStr("voltage"),
+          pickStr("duty_cycle"),
+          pickStr("ip_rating"),
+          price_cents,
+          pickStr("currency") ?? "PLN",
+          pickStr("pros"),
+          pickStr("cons"),
+          pickStr("description"),
+          pickStr("notes"),
+        ],
+      );
+      inserted++;
+    }
+    await refresh();
+    toast.success(
+      `Zaimportowano ${inserted} produktów${skipped > 0 ? ` (pominięto ${skipped} — duplikaty SKU)` : ""}`,
+    );
+  }
+
   function toggleSelect(id: number) {
     setSelected((s) => {
       const next = new Set(s);
@@ -211,6 +399,28 @@ export function Products() {
                 Porównaj ({selected.size})
               </Button>
             )}
+            <Button variant="outline" onClick={exportCSV}>
+              <Download className="h-4 w-4" />
+              Eksport CSV
+            </Button>
+            <label>
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) importCSVFile(f);
+                  e.currentTarget.value = "";
+                }}
+              />
+              <Button variant="outline" asChild>
+                <span className="cursor-pointer">
+                  <Upload className="h-4 w-4" />
+                  Import CSV
+                </span>
+              </Button>
+            </label>
             <Dialog
               open={open}
               onOpenChange={(o) => {
@@ -224,7 +434,12 @@ export function Products() {
                   Dodaj produkt
                 </Button>
               </DialogTrigger>
-              <ProductDialog editing={editing} onSubmit={save} />
+              <ProductDialog
+                editing={editing}
+                onSubmit={save}
+                attributes={attributes}
+                setAttributes={setAttributes}
+              />
             </Dialog>
           </div>
         }
@@ -396,7 +611,7 @@ export function Products() {
                       <Button
                         variant="ghost"
                         size="icon"
-                        onClick={() => remove(p.id)}
+                        onClick={() => remove(p)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -415,9 +630,13 @@ export function Products() {
 function ProductDialog({
   editing,
   onSubmit,
+  attributes,
+  setAttributes,
 }: {
   editing: Product | null;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
+  attributes: ProductAttribute[];
+  setAttributes: (next: ProductAttribute[]) => void;
 }) {
   return (
     <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
@@ -475,61 +694,6 @@ function ProductDialog({
             </Select>
           </div>
 
-          <div className="grid gap-2">
-            <Label htmlFor="max_weight_kg">Max. masa (kg)</Label>
-            <Input
-              id="max_weight_kg"
-              name="max_weight_kg"
-              type="number"
-              defaultValue={editing?.max_weight_kg ?? ""}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="max_length_m">Max. długość (m)</Label>
-            <Input
-              id="max_length_m"
-              name="max_length_m"
-              type="number"
-              step="0.1"
-              defaultValue={editing?.max_length_m ?? ""}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="power_w">Moc (W)</Label>
-            <Input
-              id="power_w"
-              name="power_w"
-              type="number"
-              defaultValue={editing?.power_w ?? ""}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="voltage">Zasilanie</Label>
-            <Input
-              id="voltage"
-              name="voltage"
-              placeholder="np. 24V DC"
-              defaultValue={editing?.voltage ?? ""}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="duty_cycle">Intensywność (duty cycle)</Label>
-            <Input
-              id="duty_cycle"
-              name="duty_cycle"
-              placeholder="np. S3 50%"
-              defaultValue={editing?.duty_cycle ?? ""}
-            />
-          </div>
-          <div className="grid gap-2">
-            <Label htmlFor="ip_rating">Klasa IP</Label>
-            <Input
-              id="ip_rating"
-              name="ip_rating"
-              placeholder="np. IP54"
-              defaultValue={editing?.ip_rating ?? ""}
-            />
-          </div>
           <div className="grid gap-2 col-span-2">
             <Label htmlFor="price">Cena (PLN)</Label>
             <Input
@@ -590,6 +754,14 @@ function ProductDialog({
               rows={2}
               defaultValue={editing?.notes ?? ""}
             />
+          </div>
+
+          <div className="grid gap-2 col-span-2">
+            <Label>Dodatkowe atrybuty</Label>
+            <p className="text-xs text-muted-foreground -mt-1">
+              Pary klucz/wartość — np. „Akcesoria w komplecie” / „Pilot 2 szt”.
+            </p>
+            <AttributesEditor value={attributes} onChange={setAttributes} />
           </div>
         </div>
 

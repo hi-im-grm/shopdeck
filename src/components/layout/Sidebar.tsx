@@ -6,6 +6,7 @@ import {
   ListTodo,
   StickyNote,
   Store,
+  Layers,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -14,6 +15,7 @@ const items = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/customers", label: "Klienci", icon: Users },
   { to: "/products", label: "Produkty", icon: Package },
+  { to: "/templates", label: "Szablony ofert", icon: Layers },
   { to: "/todos", label: "Todo", icon: ListTodo },
   { to: "/notes", label: "Notatki", icon: StickyNote },
 ];
@@ -47,9 +49,6 @@ export function Sidebar() {
       </nav>
       <div className="p-3 border-t space-y-2">
         <ThemeToggle />
-        <p className="text-xs text-muted-foreground px-3">
-          offline-first · v0.1.0
-        </p>
       </div>
     </aside>
   );

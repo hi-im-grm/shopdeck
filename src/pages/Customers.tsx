@@ -1,6 +1,14 @@
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState, FormEvent, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { db, type Customer, type CustomerKind } from "@/lib/db";
+import {
+  db,
+  type Customer,
+  type CustomerKind,
+  CUSTOMER_TAG_PRESETS,
+  parseTags,
+  stringifyTags,
+} from "@/lib/db";
+import { TagEditor } from "@/components/TagEditor";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,8 +39,11 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Pencil, Trash2, Building2, User } from "lucide-react";
+import { Plus, Pencil, Trash2, Building2, User, Download } from "lucide-react";
 import { toast } from "sonner";
+import { toCSV, downloadCSV, unixToISO } from "@/lib/csv";
+import { logChange, logDelete } from "@/lib/audit";
+import { recordWriteForBackup } from "@/lib/autobackup";
 
 export function Customers() {
   const [rows, setRows] = useState<Customer[]>([]);
@@ -40,6 +51,8 @@ export function Customers() {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Customer | null>(null);
   const [kind, setKind] = useState<CustomerKind>("b2c");
+  const [tags, setTags] = useState<string[]>([]);
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
 
   async function refresh() {
     const conn = await db();
@@ -56,6 +69,7 @@ export function Customers() {
 
   useEffect(() => {
     setKind(editing?.kind ?? "b2c");
+    setTags(parseTags(editing?.tags_json));
   }, [editing, open]);
 
   async function save(e: FormEvent<HTMLFormElement>) {
@@ -70,33 +84,116 @@ export function Customers() {
     const address = String(fd.get("address") ?? "") || null;
     const notes = String(fd.get("notes") ?? "") || null;
 
+    const tags_json = stringifyTags(tags);
+
     const conn = await db();
+    let savedId: number;
     if (editing) {
-      await conn.execute(
-        "UPDATE customers SET name=?, kind=?, company=?, nip=?, email=?, phone=?, address=?, notes=? WHERE id=?",
-        [name, kind, company, nip, email, phone, address, notes, editing.id],
+      const [before] = await conn.select<Customer[]>(
+        "SELECT * FROM customers WHERE id=?",
+        [editing.id],
       );
+      await conn.execute(
+        "UPDATE customers SET name=?, kind=?, company=?, nip=?, email=?, phone=?, address=?, notes=?, tags_json=? WHERE id=?",
+        [name, kind, company, nip, email, phone, address, notes, tags_json, editing.id],
+      );
+      const [after] = await conn.select<Customer[]>(
+        "SELECT * FROM customers WHERE id=?",
+        [editing.id],
+      );
+      await logChange(
+        "customer",
+        editing.id,
+        before as unknown as Record<string, unknown>,
+        after as unknown as Record<string, unknown>,
+      );
+      savedId = editing.id;
       toast.success("Klient zaktualizowany");
     } else {
-      await conn.execute(
-        "INSERT INTO customers (name, kind, company, nip, email, phone, address, notes) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [name, kind, company, nip, email, phone, address, notes],
+      const res = await conn.execute(
+        "INSERT INTO customers (name, kind, company, nip, email, phone, address, notes, tags_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [name, kind, company, nip, email, phone, address, notes, tags_json],
+      );
+      savedId = Number(res.lastInsertId ?? 0);
+      const [after] = await conn.select<Customer[]>(
+        "SELECT * FROM customers WHERE id=?",
+        [savedId],
+      );
+      await logChange(
+        "customer",
+        savedId,
+        null,
+        after as unknown as Record<string, unknown>,
       );
       toast.success("Klient dodany");
     }
+    void recordWriteForBackup();
     setOpen(false);
     setEditing(null);
     await refresh();
   }
 
-  async function remove(id: number) {
+  async function remove(c: Customer) {
+    if (
+      !window.confirm(
+        `Usunąć klienta „${c.name}”?\n\nUWAGA: skasuje też wszystkie interakcje przypisane do tego klienta. ` +
+          `Notatki i zadania zostaną zachowane (tylko odpięte).`,
+      )
+    )
+      return;
     const conn = await db();
-    await conn.execute("DELETE FROM customers WHERE id=?", [id]);
+    const [snapshot] = await conn.select<Customer[]>(
+      "SELECT * FROM customers WHERE id=?",
+      [c.id],
+    );
+    await conn.execute("DELETE FROM customers WHERE id=?", [c.id]);
+    await logDelete(
+      "customer",
+      c.id,
+      snapshot as unknown as Record<string, unknown>,
+    );
+    void recordWriteForBackup();
     toast.success("Klient usunięty");
     await refresh();
   }
 
+  function exportCSV() {
+    if (rows.length === 0) {
+      toast.info("Brak klientów do eksportu");
+      return;
+    }
+    const csv = toCSV(rows, [
+      { header: "id", get: (c) => c.id },
+      { header: "name", get: (c) => c.name },
+      { header: "kind", get: (c) => c.kind },
+      { header: "company", get: (c) => c.company },
+      { header: "nip", get: (c) => c.nip },
+      { header: "email", get: (c) => c.email },
+      { header: "phone", get: (c) => c.phone },
+      { header: "address", get: (c) => c.address },
+      { header: "notes", get: (c) => c.notes },
+      { header: "created_at", get: (c) => unixToISO(c.created_at) },
+    ]);
+    const stamp = new Date().toISOString().slice(0, 10);
+    downloadCSV(`shopdeck-klienci-${stamp}.csv`, csv);
+    toast.success(`Wyeksportowano ${rows.length} klientów`);
+  }
+
+  const allTags = useMemo(() => {
+    const seen = new Map<string, number>();
+    for (const c of rows) {
+      for (const t of parseTags(c.tags_json)) {
+        seen.set(t, (seen.get(t) ?? 0) + 1);
+      }
+    }
+    return Array.from(seen.entries()).sort((a, b) => b[1] - a[1]);
+  }, [rows]);
+
   const filtered = rows.filter((c) => {
+    if (tagFilter) {
+      const ts = parseTags(c.tags_json);
+      if (!ts.includes(tagFilter)) return false;
+    }
     if (!search) return true;
     const s = search.toLowerCase();
     return (
@@ -104,7 +201,8 @@ export function Customers() {
       c.company?.toLowerCase().includes(s) ||
       c.email?.toLowerCase().includes(s) ||
       c.phone?.toLowerCase().includes(s) ||
-      c.nip?.toLowerCase().includes(s)
+      c.nip?.toLowerCase().includes(s) ||
+      parseTags(c.tags_json).some((t) => t.toLowerCase().includes(s))
     );
   });
 
@@ -114,6 +212,11 @@ export function Customers() {
         title="Klienci"
         description={`Łącznie: ${rows.length}${search ? ` · widoczne: ${filtered.length}` : ""}`}
         action={
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={exportCSV}>
+              <Download className="h-4 w-4" />
+              Eksport CSV
+            </Button>
           <Dialog
             open={open}
             onOpenChange={(o) => {
@@ -212,6 +315,15 @@ export function Customers() {
                     />
                   </div>
                   <div className="grid gap-2">
+                    <Label>Tagi</Label>
+                    <TagEditor
+                      value={tags}
+                      onChange={setTags}
+                      presets={CUSTOMER_TAG_PRESETS}
+                      placeholder="np. VIP, hurt, zaległy…"
+                    />
+                  </div>
+                  <div className="grid gap-2">
                     <Label htmlFor="notes">Notatki</Label>
                     <Textarea
                       id="notes"
@@ -227,15 +339,46 @@ export function Customers() {
               </form>
             </DialogContent>
           </Dialog>
+          </div>
         }
       />
       <div className="p-6 space-y-4">
         <Input
-          placeholder="Szukaj po nazwie, firmie, email, telefonie, NIP…"
+          placeholder="Szukaj po nazwie, firmie, email, telefonie, NIP, tagu…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-md"
         />
+        {allTags.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            <span className="text-xs text-muted-foreground mr-1">Filtruj po tagu:</span>
+            <button
+              type="button"
+              onClick={() => setTagFilter(null)}
+              className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                tagFilter === null
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "hover:bg-muted"
+              }`}
+            >
+              wszystkie
+            </button>
+            {allTags.map(([t, n]) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setTagFilter(tagFilter === t ? null : t)}
+                className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                  tagFilter === t
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "hover:bg-muted"
+                }`}
+              >
+                {t} <span className="opacity-60">·{n}</span>
+              </button>
+            ))}
+          </div>
+        )}
         {filtered.length === 0 ? (
           <div className="rounded-lg border border-dashed p-12 text-center text-muted-foreground">
             {rows.length === 0
@@ -275,6 +418,23 @@ export function Customers() {
                         {c.company}
                       </div>
                     )}
+                    {(() => {
+                      const ts = parseTags(c.tags_json);
+                      if (ts.length === 0) return null;
+                      return (
+                        <div className="flex flex-wrap gap-1 mt-1">
+                          {ts.map((t) => (
+                            <Badge
+                              key={t}
+                              variant="outline"
+                              className="text-[10px] py-0 h-4"
+                            >
+                              {t}
+                            </Badge>
+                          ))}
+                        </div>
+                      );
+                    })()}
                   </TableCell>
                   <TableCell className="text-muted-foreground text-sm">
                     {c.email && <div>{c.email}</div>}
@@ -302,7 +462,7 @@ export function Customers() {
                     <Button
                       variant="ghost"
                       size="icon"
-                      onClick={() => remove(c.id)}
+                      onClick={() => remove(c)}
                     >
                       <Trash2 className="h-4 w-4" />
                     </Button>

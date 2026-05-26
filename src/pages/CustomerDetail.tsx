@@ -47,10 +47,13 @@ import {
   Trash2,
   CheckCircle2,
   Circle,
+  CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 import { LinkedNotes } from "@/components/LinkedNotes";
 import { LinkedTodos } from "@/components/LinkedTodos";
+import { AuditHistory } from "@/components/AuditHistory";
 
 const KIND_ICONS: Record<InteractionKind, React.ComponentType<{ className?: string }>> = {
   call: Phone,
@@ -68,6 +71,25 @@ function formatDate(ts: number): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+/** Format unix-seconds → "dd.mm.yyyy HH:MM" for follow-up display. */
+function formatFollowUp(ts: number): string {
+  const d = new Date(ts * 1000);
+  return d.toLocaleString("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** Convert <input type="datetime-local"> value → unix seconds, or null. */
+function datetimeLocalToUnix(value: string): number | null {
+  if (!value) return null;
+  const ts = Date.parse(value);
+  return Number.isFinite(ts) ? Math.floor(ts / 1000) : null;
 }
 
 export function CustomerDetail() {
@@ -104,12 +126,15 @@ export function CustomerDetail() {
     const summary = String(fd.get("summary") ?? "").trim();
     const body_md = String(fd.get("body_md") ?? "") || null;
     const status = String(fd.get("status") ?? "open");
+    const follow_up_at = datetimeLocalToUnix(
+      String(fd.get("follow_up_at") ?? ""),
+    );
     if (!summary) return;
 
     const conn = await db();
     await conn.execute(
-      "INSERT INTO interactions (customer_id, kind, summary, body_md, status) VALUES (?, ?, ?, ?, ?)",
-      [customerId, kind, summary, body_md, status],
+      "INSERT INTO interactions (customer_id, kind, summary, body_md, status, follow_up_at) VALUES (?, ?, ?, ?, ?, ?)",
+      [customerId, kind, summary, body_md, status, follow_up_at],
     );
     toast.success("Interakcja zapisana");
     setOpen(false);
@@ -126,9 +151,10 @@ export function CustomerDetail() {
     await refresh();
   }
 
-  async function removeInteraction(id: number) {
+  async function removeInteraction(i: Interaction) {
+    if (!window.confirm(`Usunąć interakcję: „${i.summary}”?`)) return;
     const conn = await db();
-    await conn.execute("DELETE FROM interactions WHERE id=?", [id]);
+    await conn.execute("DELETE FROM interactions WHERE id=?", [i.id]);
     toast.success("Interakcja usunięta");
     await refresh();
   }
@@ -233,6 +259,7 @@ export function CustomerDetail() {
               </TabsTrigger>
               <TabsTrigger value="notes">Notatki</TabsTrigger>
               <TabsTrigger value="todos">Todo</TabsTrigger>
+              <TabsTrigger value="history">Historia zmian</TabsTrigger>
             </TabsList>
 
             <TabsContent value="interactions" className="space-y-3 mt-4">
@@ -300,6 +327,20 @@ export function CustomerDetail() {
                           />
                         </div>
                         <div className="grid gap-2">
+                          <Label htmlFor="follow_up_at">
+                            Follow-up (opcjonalnie)
+                          </Label>
+                          <Input
+                            id="follow_up_at"
+                            name="follow_up_at"
+                            type="datetime-local"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Otwarte interakcje z follow-upem pojawią się na
+                            Dashboard.
+                          </p>
+                        </div>
+                        <div className="grid gap-2">
                           <Label htmlFor="body_md">
                             Notatka (więcej szczegółów)
                           </Label>
@@ -353,7 +394,7 @@ export function CustomerDetail() {
                               variant="ghost"
                               size="icon"
                               className="h-6 w-6"
-                              onClick={() => removeInteraction(i.id)}
+                              onClick={() => removeInteraction(i)}
                             >
                               <Trash2 className="h-3 w-3" />
                             </Button>
@@ -372,6 +413,22 @@ export function CustomerDetail() {
                               {i.body_md}
                             </div>
                           )}
+                          {i.follow_up_at && (
+                            <div
+                              className={cn(
+                                "text-xs mt-2 inline-flex items-center gap-1 px-2 py-0.5 rounded",
+                                i.status === "open" &&
+                                  i.follow_up_at * 1000 < Date.now()
+                                  ? "bg-red-500/10 text-red-600 dark:text-red-400"
+                                  : i.status === "open"
+                                    ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                                    : "bg-muted text-muted-foreground line-through",
+                              )}
+                            >
+                              <CalendarClock className="h-3 w-3" />
+                              Follow-up: {formatFollowUp(i.follow_up_at)}
+                            </div>
+                          )}
                         </div>
                       </CardContent>
                     </Card>
@@ -386,6 +443,10 @@ export function CustomerDetail() {
 
             <TabsContent value="todos" className="mt-4">
               <LinkedTodos entityType="customer" entityId={customer.id} />
+            </TabsContent>
+
+            <TabsContent value="history" className="mt-4">
+              <AuditHistory entityType="customer" entityId={customer.id} />
             </TabsContent>
           </Tabs>
         </div>

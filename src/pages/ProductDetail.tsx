@@ -3,9 +3,12 @@ import { useParams, Link } from "react-router-dom";
 import {
   db,
   type Product,
+  type ProductPriceHistory,
   DRIVE_TYPE_LABELS,
   formatPLN,
+  parseProductAttributes,
 } from "@/lib/db";
+import { iconByName } from "@/lib/icons";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,15 +28,20 @@ import {
   Battery,
   Activity,
   Shield,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from "lucide-react";
 import { LinkedNotes } from "@/components/LinkedNotes";
 import { LinkedTodos } from "@/components/LinkedTodos";
 import { ExternalLinks } from "@/components/ExternalLinks";
+import { AuditHistory } from "@/components/AuditHistory";
 
 export function ProductDetail() {
   const { id } = useParams<{ id: string }>();
   const productId = parseInt(id ?? "0", 10);
   const [product, setProduct] = useState<Product | null>(null);
+  const [priceHistory, setPriceHistory] = useState<ProductPriceHistory[]>([]);
 
   async function refresh() {
     const conn = await db();
@@ -42,6 +50,12 @@ export function ProductDetail() {
       [productId],
     );
     setProduct(p ?? null);
+    setPriceHistory(
+      await conn.select<ProductPriceHistory[]>(
+        "SELECT * FROM product_price_history WHERE product_id=? ORDER BY changed_at DESC",
+        [productId],
+      ),
+    );
   }
 
   useEffect(() => {
@@ -145,6 +159,39 @@ export function ProductDetail() {
                 )}
               </div>
 
+              {(() => {
+                const attrs = parseProductAttributes(product.attributes_json);
+                if (attrs.length === 0) return null;
+                return (
+                  <div className="pt-2 border-t space-y-1">
+                    <div className="text-xs text-muted-foreground font-medium">
+                      Dodatkowe atrybuty
+                    </div>
+                    <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-sm">
+                      {attrs.map((a, i) => {
+                        const Icon = iconByName(a.icon);
+                        return (
+                          <div
+                            key={`${a.key}-${i}`}
+                            className="flex items-center gap-2 min-w-0"
+                          >
+                            {Icon && (
+                              <Icon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                            )}
+                            <span className="text-muted-foreground truncate">
+                              {a.key}:
+                            </span>
+                            <span className="font-medium truncate">
+                              {a.value || "—"}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="pt-2 border-t">
                 <ExternalLinks
                   productId={product.id}
@@ -162,6 +209,7 @@ export function ProductDetail() {
             <TabsTrigger value="proscons">Zalety i wady</TabsTrigger>
             <TabsTrigger value="notes">Notatki</TabsTrigger>
             <TabsTrigger value="todos">Todo</TabsTrigger>
+            <TabsTrigger value="history">Historia zmian</TabsTrigger>
           </TabsList>
 
           <TabsContent value="proscons" className="space-y-4 mt-4">
@@ -210,7 +258,62 @@ export function ProductDetail() {
           <TabsContent value="todos" className="mt-4">
             <LinkedTodos entityType="product" entityId={product.id} />
           </TabsContent>
+
+          <TabsContent value="history" className="mt-4">
+            <AuditHistory entityType="product" entityId={product.id} />
+          </TabsContent>
         </Tabs>
+
+        {priceHistory.length > 0 && (
+          <Card>
+            <CardContent className="p-4 space-y-2">
+              <h3 className="font-semibold text-sm flex items-center gap-2">
+                <TrendingUp className="h-4 w-4" />
+                Historia cen ({priceHistory.length})
+              </h3>
+              <div className="space-y-1 text-sm">
+                {priceHistory.map((h) => {
+                  const diff = h.new_price_cents - h.old_price_cents;
+                  const TrendIcon =
+                    diff > 0 ? TrendingUp : diff < 0 ? TrendingDown : Minus;
+                  const color =
+                    diff > 0
+                      ? "text-red-600 dark:text-red-400"
+                      : diff < 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-muted-foreground";
+                  return (
+                    <div
+                      key={h.id}
+                      className="flex items-center justify-between gap-3 py-1 border-b last:border-0"
+                    >
+                      <span className="text-xs text-muted-foreground tabular-nums">
+                        {new Date(h.changed_at * 1000).toLocaleDateString(
+                          "pl-PL",
+                          { day: "2-digit", month: "2-digit", year: "numeric" },
+                        )}
+                      </span>
+                      <span className="tabular-nums text-muted-foreground line-through">
+                        {formatPLN(h.old_price_cents)}
+                      </span>
+                      <span className="text-muted-foreground">→</span>
+                      <span className="tabular-nums font-medium">
+                        {formatPLN(h.new_price_cents)}
+                      </span>
+                      <span
+                        className={`tabular-nums flex items-center gap-1 ${color} w-24 justify-end`}
+                      >
+                        <TrendIcon className="h-3 w-3" />
+                        {diff > 0 ? "+" : ""}
+                        {formatPLN(diff)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
     </>
   );
