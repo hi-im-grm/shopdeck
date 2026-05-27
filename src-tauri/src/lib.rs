@@ -27,6 +27,12 @@ pub fn run() {
             sql: include_str!("../migrations/004_security_audit_backup.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 5,
+            description: "interaction templates + 7 seeded presets",
+            sql: include_str!("../migrations/005_interaction_templates.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

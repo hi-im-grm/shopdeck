@@ -7,6 +7,8 @@ import {
   StickyNote,
   Store,
   Layers,
+  Phone,
+  FileText,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -14,8 +16,10 @@ import { ThemeToggle } from "@/components/ThemeToggle";
 const items = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
   { to: "/customers", label: "Klienci", icon: Users },
+  { to: "/interactions", label: "Sprawy", icon: Phone },
   { to: "/products", label: "Produkty", icon: Package },
   { to: "/templates", label: "Szablony ofert", icon: Layers },
+  { to: "/interaction-templates", label: "Szablony spraw", icon: FileText },
   { to: "/todos", label: "Todo", icon: ListTodo },
   { to: "/notes", label: "Notatki", icon: StickyNote },
 ];

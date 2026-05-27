@@ -226,10 +226,10 @@ export function Dashboard() {
       to: "/products",
     },
     {
-      label: "Otwarte interakcje",
+      label: "Otwarte sprawy",
       value: stats?.open_interactions ?? "…",
       icon: Phone,
-      to: "/customers",
+      to: "/interactions?filter=open",
     },
     {
       label: "Otwarte zadania",

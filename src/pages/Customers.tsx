@@ -4,9 +4,13 @@ import {
   db,
   type Customer,
   type CustomerKind,
+  type InteractionKind,
+  type InteractionTemplate,
   CUSTOMER_TAG_PRESETS,
+  INTERACTION_KIND_LABELS,
   parseTags,
   stringifyTags,
+  customerDisplayName,
 } from "@/lib/db";
 import { TagEditor } from "@/components/TagEditor";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -54,11 +58,24 @@ export function Customers() {
   const [tags, setTags] = useState<string[]>([]);
   const [tagFilter, setTagFilter] = useState<string | null>(null);
 
+  // "First interaction" feature: when creating a NEW customer the dialog
+  // can also add an initial interaction (saves a click → detail → +).
+  const [firstSummary, setFirstSummary] = useState("");
+  const [firstKind, setFirstKind] = useState<InteractionKind>("call");
+  const [interactionTemplates, setInteractionTemplates] = useState<
+    InteractionTemplate[]
+  >([]);
+
   async function refresh() {
     const conn = await db();
     setRows(
       await conn.select<Customer[]>(
         "SELECT * FROM customers ORDER BY created_at DESC",
+      ),
+    );
+    setInteractionTemplates(
+      await conn.select<InteractionTemplate[]>(
+        "SELECT * FROM interaction_templates ORDER BY use_count DESC, name ASC",
       ),
     );
   }
@@ -70,19 +87,31 @@ export function Customers() {
   useEffect(() => {
     setKind(editing?.kind ?? "b2c");
     setTags(parseTags(editing?.tags_json));
+    // Reset "first interaction" inputs whenever the dialog opens or we
+    // switch between edit/new.
+    setFirstSummary("");
+    setFirstKind("call");
   }, [editing, open]);
 
   async function save(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const fd = new FormData(e.currentTarget);
     const name = String(fd.get("name") ?? "").trim();
-    if (!name) return;
     const company = String(fd.get("company") ?? "") || null;
     const nip = String(fd.get("nip") ?? "") || null;
     const email = String(fd.get("email") ?? "") || null;
     const phone = String(fd.get("phone") ?? "") || null;
     const address = String(fd.get("address") ?? "") || null;
     const notes = String(fd.get("notes") ?? "") || null;
+
+    // Require AT LEAST one identifying field so we can find the customer
+    // later. Phone-only is the common "anonymous quick call" case.
+    if (!name && !phone && !email && !company) {
+      toast.error(
+        "Podaj przynajmniej jedno pole identyfikujące: imię/nazwę, firmę, telefon lub email.",
+      );
+      return;
+    }
 
     const tags_json = stringifyTags(tags);
 
@@ -125,7 +154,19 @@ export function Customers() {
         null,
         after as unknown as Record<string, unknown>,
       );
-      toast.success("Klient dodany");
+
+      // Optional: add the initial interaction in the same dialog so a quick
+      // phone call doesn't require navigating into the customer afterward.
+      const firstSummaryTrim = firstSummary.trim();
+      if (firstSummaryTrim) {
+        await conn.execute(
+          "INSERT INTO interactions (customer_id, kind, summary, status) VALUES (?, ?, ?, 'open')",
+          [savedId, firstKind, firstSummaryTrim],
+        );
+        toast.success("Klient + sprawa dodane");
+      } else {
+        toast.success("Klient dodany");
+      }
     }
     void recordWriteForBackup();
     setOpen(false);
@@ -258,13 +299,16 @@ export function Customers() {
                   </div>
                   <div className="grid gap-2">
                     <Label htmlFor="name">
-                      {kind === "b2b" ? "Osoba kontaktowa" : "Imię i nazwisko"}
+                      {kind === "b2b" ? "Osoba kontaktowa" : "Imię i nazwisko"}{" "}
+                      <span className="text-xs text-muted-foreground font-normal">
+                        (opcjonalne — wystarczy telefon)
+                      </span>
                     </Label>
                     <Input
                       id="name"
                       name="name"
-                      required
                       defaultValue={editing?.name ?? ""}
+                      placeholder="np. Jan Kowalski lub puste"
                     />
                   </div>
                   {kind === "b2b" && (
@@ -323,6 +367,62 @@ export function Customers() {
                       placeholder="np. VIP, hurt, zaległy…"
                     />
                   </div>
+
+                  {!editing && (
+                    <div className="grid gap-2 p-3 rounded-md border border-dashed bg-muted/30">
+                      <Label className="text-sm">
+                        Pierwsza sprawa{" "}
+                        <span className="text-xs text-muted-foreground font-normal">
+                          (opcjonalne — od razu dodaj powód kontaktu)
+                        </span>
+                      </Label>
+                      {interactionTemplates.length > 0 && (
+                        <div className="flex flex-wrap gap-1">
+                          {interactionTemplates.slice(0, 8).map((tmpl) => (
+                            <button
+                              key={tmpl.id}
+                              type="button"
+                              onClick={() => {
+                                setFirstSummary(tmpl.summary_template);
+                                setFirstKind(tmpl.kind);
+                              }}
+                              className="text-xs px-2 py-0.5 rounded-full border border-dashed hover:bg-muted transition-colors"
+                            >
+                              + {tmpl.name}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="grid grid-cols-[120px_1fr] gap-2">
+                        <Select
+                          value={firstKind}
+                          onValueChange={(v) =>
+                            setFirstKind(v as InteractionKind)
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(
+                              Object.keys(
+                                INTERACTION_KIND_LABELS,
+                              ) as InteractionKind[]
+                            ).map((k) => (
+                              <SelectItem key={k} value={k}>
+                                {INTERACTION_KIND_LABELS[k]}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Input
+                          value={firstSummary}
+                          onChange={(e) => setFirstSummary(e.target.value)}
+                          placeholder="np. Pyta o numer serwisu"
+                        />
+                      </div>
+                    </div>
+                  )}
                   <div className="grid gap-2">
                     <Label htmlFor="notes">Notatki</Label>
                     <Textarea
@@ -411,9 +511,9 @@ export function Customers() {
                       to={`/customers/${c.id}`}
                       className="font-medium hover:underline"
                     >
-                      {c.name}
+                      {customerDisplayName(c)}
                     </Link>
-                    {c.company && (
+                    {c.company && c.name && (
                       <div className="text-xs text-muted-foreground">
                         {c.company}
                       </div>

@@ -13,6 +13,12 @@ export type CustomerKind = "b2c" | "b2b";
 
 export type Customer = {
   id: number;
+  /**
+   * May be an empty string when the customer was created from an
+   * unidentified phone call (we only had a number / no name given).
+   * Always present in DB (TEXT NOT NULL DEFAULT '') — render through
+   * `customerDisplayName()` to get a user-facing string.
+   */
   name: string;
   kind: CustomerKind;
   company: string | null;
@@ -25,6 +31,24 @@ export type Customer = {
   tags_json: string;
   created_at: number;
 };
+
+/**
+ * User-facing name for a customer — falls back through name → company →
+ * phone → email → "Klient #ID" so something always shows up.
+ */
+export function customerDisplayName(c: {
+  id: number;
+  name: string | null;
+  company?: string | null;
+  phone?: string | null;
+  email?: string | null;
+}): string {
+  if (c.name && c.name.trim()) return c.name;
+  if (c.company && c.company.trim()) return c.company;
+  if (c.phone && c.phone.trim()) return c.phone;
+  if (c.email && c.email.trim()) return c.email;
+  return `Klient #${c.id}`;
+}
 
 /** Preset tag suggestions surfaced in the tag editor. Users may add custom ones. */
 export const CUSTOMER_TAG_PRESETS = [
@@ -103,6 +127,16 @@ export const INTERACTION_KIND_LABELS: Record<InteractionKind, string> = {
   sms: "SMS",
   meeting: "Spotkanie",
   other: "Inne",
+};
+
+export type InteractionTemplate = {
+  id: number;
+  name: string;
+  kind: InteractionKind;
+  summary_template: string;
+  body_template: string | null;
+  use_count: number;
+  created_at: number;
 };
 
 export type Interaction = {

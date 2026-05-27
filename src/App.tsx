@@ -10,6 +10,8 @@ import { Compare } from "@/pages/Compare";
 import { Todos } from "@/pages/Todos";
 import { Notes } from "@/pages/Notes";
 import { Templates } from "@/pages/Templates";
+import { Interactions } from "@/pages/Interactions";
+import { InteractionTemplates } from "@/pages/InteractionTemplates";
 
 export default function App() {
   return (
@@ -25,6 +27,8 @@ export default function App() {
           <Route path="todos" element={<Todos />} />
           <Route path="notes" element={<Notes />} />
           <Route path="templates" element={<Templates />} />
+          <Route path="interactions" element={<Interactions />} />
+          <Route path="interaction-templates" element={<InteractionTemplates />} />
         </Route>
       </Routes>
     </PasswordGate>

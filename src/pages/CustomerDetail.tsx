@@ -5,7 +5,9 @@ import {
   type Customer,
   type Interaction,
   type InteractionKind,
+  type InteractionTemplate,
   INTERACTION_KIND_LABELS,
+  customerDisplayName,
 } from "@/lib/db";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Button } from "@/components/ui/button";
@@ -99,6 +101,14 @@ export function CustomerDetail() {
   const [customer, setCustomer] = useState<Customer | null>(null);
   const [interactions, setInteractions] = useState<Interaction[]>([]);
   const [open, setOpen] = useState(false);
+  const [templates, setTemplates] = useState<InteractionTemplate[]>([]);
+  /** Controlled values so a template-pick can prefill them. */
+  const [drafKind, setDraftKind] = useState<InteractionKind>("call");
+  const [draftSummary, setDraftSummary] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [draftStatus, setDraftStatus] = useState<"open" | "done">("open");
+  const [draftFollowUp, setDraftFollowUp] = useState("");
+  const [usedTemplateId, setUsedTemplateId] = useState<number | null>(null);
 
   async function refresh() {
     const conn = await db();
@@ -113,6 +123,30 @@ export function CustomerDetail() {
         [customerId],
       ),
     );
+    setTemplates(
+      await conn.select<InteractionTemplate[]>(
+        "SELECT * FROM interaction_templates ORDER BY use_count DESC, name ASC",
+      ),
+    );
+  }
+
+  /** Reset draft fields whenever the dialog opens for a fresh entry. */
+  useEffect(() => {
+    if (open) {
+      setDraftKind("call");
+      setDraftSummary("");
+      setDraftBody("");
+      setDraftStatus("open");
+      setDraftFollowUp("");
+      setUsedTemplateId(null);
+    }
+  }, [open]);
+
+  function applyTemplate(tmpl: InteractionTemplate) {
+    setDraftKind(tmpl.kind);
+    setDraftSummary(tmpl.summary_template);
+    setDraftBody(tmpl.body_template ?? "");
+    setUsedTemplateId(tmpl.id);
   }
 
   useEffect(() => {
@@ -121,21 +155,23 @@ export function CustomerDetail() {
 
   async function addInteraction(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const kind = (fd.get("kind") as InteractionKind) ?? "call";
-    const summary = String(fd.get("summary") ?? "").trim();
-    const body_md = String(fd.get("body_md") ?? "") || null;
-    const status = String(fd.get("status") ?? "open");
-    const follow_up_at = datetimeLocalToUnix(
-      String(fd.get("follow_up_at") ?? ""),
-    );
+    const summary = draftSummary.trim();
     if (!summary) return;
+    const body_md = draftBody.trim() || null;
+    const follow_up_at = datetimeLocalToUnix(draftFollowUp);
 
     const conn = await db();
     await conn.execute(
       "INSERT INTO interactions (customer_id, kind, summary, body_md, status, follow_up_at) VALUES (?, ?, ?, ?, ?, ?)",
-      [customerId, kind, summary, body_md, status, follow_up_at],
+      [customerId, drafKind, summary, body_md, draftStatus, follow_up_at],
     );
+    // Bump template popularity so frequently used ones bubble up.
+    if (usedTemplateId !== null) {
+      await conn.execute(
+        "UPDATE interaction_templates SET use_count = use_count + 1 WHERE id = ?",
+        [usedTemplateId],
+      );
+    }
     toast.success("Interakcja zapisana");
     setOpen(false);
     await refresh();
@@ -171,7 +207,7 @@ export function CustomerDetail() {
   return (
     <>
       <PageHeader
-        title={customer.name}
+        title={customerDisplayName(customer)}
         description={
           customer.kind === "b2b" && customer.company
             ? customer.company
@@ -276,14 +312,48 @@ export function CustomerDetail() {
                       <DialogHeader>
                         <DialogTitle>Nowa interakcja</DialogTitle>
                         <DialogDescription>
-                          Szybki zapis: kto, o czym, kiedy.
+                          Wybierz szablon lub wpisz ręcznie.
                         </DialogDescription>
                       </DialogHeader>
                       <div className="grid gap-4 py-4">
+                        {templates.length > 0 && (
+                          <div className="grid gap-1">
+                            <Label className="text-xs text-muted-foreground">
+                              Szablony spraw
+                            </Label>
+                            <div className="flex flex-wrap gap-1">
+                              {templates.slice(0, 10).map((tmpl) => (
+                                <button
+                                  key={tmpl.id}
+                                  type="button"
+                                  onClick={() => applyTemplate(tmpl)}
+                                  className={`text-xs px-2 py-0.5 rounded-full border border-dashed transition-colors ${
+                                    usedTemplateId === tmpl.id
+                                      ? "bg-primary text-primary-foreground border-primary"
+                                      : "hover:bg-muted"
+                                  }`}
+                                >
+                                  {tmpl.name}
+                                </button>
+                              ))}
+                              <Link
+                                to="/interaction-templates"
+                                className="text-xs px-2 py-0.5 rounded-full border text-muted-foreground hover:bg-muted"
+                              >
+                                + Zarządzaj
+                              </Link>
+                            </div>
+                          </div>
+                        )}
                         <div className="grid grid-cols-2 gap-3">
                           <div className="grid gap-2">
                             <Label htmlFor="kind">Rodzaj</Label>
-                            <Select name="kind" defaultValue="call">
+                            <Select
+                              value={drafKind}
+                              onValueChange={(v) =>
+                                setDraftKind(v as InteractionKind)
+                              }
+                            >
                               <SelectTrigger>
                                 <SelectValue />
                               </SelectTrigger>
@@ -302,7 +372,12 @@ export function CustomerDetail() {
                           </div>
                           <div className="grid gap-2">
                             <Label htmlFor="status">Status</Label>
-                            <Select name="status" defaultValue="open">
+                            <Select
+                              value={draftStatus}
+                              onValueChange={(v) =>
+                                setDraftStatus(v as "open" | "done")
+                              }
+                            >
                               <SelectTrigger>
                                 <SelectValue />
                               </SelectTrigger>
@@ -321,7 +396,8 @@ export function CustomerDetail() {
                           <Label htmlFor="summary">O czym (krótko)</Label>
                           <Input
                             id="summary"
-                            name="summary"
+                            value={draftSummary}
+                            onChange={(e) => setDraftSummary(e.target.value)}
                             required
                             placeholder="np. Pyta o napęd skrzydłowy do 300kg"
                           />
@@ -332,8 +408,9 @@ export function CustomerDetail() {
                           </Label>
                           <Input
                             id="follow_up_at"
-                            name="follow_up_at"
                             type="datetime-local"
+                            value={draftFollowUp}
+                            onChange={(e) => setDraftFollowUp(e.target.value)}
                           />
                           <p className="text-xs text-muted-foreground">
                             Otwarte interakcje z follow-upem pojawią się na
@@ -344,7 +421,12 @@ export function CustomerDetail() {
                           <Label htmlFor="body_md">
                             Notatka (więcej szczegółów)
                           </Label>
-                          <Textarea id="body_md" name="body_md" rows={5} />
+                          <Textarea
+                            id="body_md"
+                            value={draftBody}
+                            onChange={(e) => setDraftBody(e.target.value)}
+                            rows={5}
+                          />
                         </div>
                       </div>
                       <DialogFooter>
