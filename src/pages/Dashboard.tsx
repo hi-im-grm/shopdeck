@@ -1,6 +1,11 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link } from "react-router-dom";
-import { db } from "@/lib/db";
+import {
+  db,
+  type InteractionKind,
+  INTERACTION_KIND_LABELS,
+  customerDisplayName,
+} from "@/lib/db";
 import { seedDatabase, clearAllData } from "@/lib/seed";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,28 +18,17 @@ import {
   Sparkles,
   Trash2,
   CalendarClock,
-  Download,
-  Upload,
+  AlertTriangle,
+  Mail,
+  MessageSquare,
+  TrendingUp,
+  TrendingDown,
+  Minus,
+  Circle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import {
-  downloadBackup,
-  importBackup,
-  readBackupFile,
-  getCurrentRowCounts,
-  TABLE_LABELS_PL,
-} from "@/lib/backup";
-import {
-  getBackupStatus,
-  pickBackupFolder,
-  clearBackupFolder,
-  writeBackupToFolder,
-  runDailyBackupIfNeeded,
-  formatRelative,
-  type BackupStatus,
-} from "@/lib/autobackup";
-import { FolderCog, ShieldCheck } from "lucide-react";
+import { runDailyBackupIfNeeded } from "@/lib/autobackup";
 
 type Stats = {
   customers: number;
@@ -47,14 +41,73 @@ type FollowUp = {
   id: number;
   customer_id: number | null;
   customer_name: string | null;
+  customer_company: string | null;
+  customer_phone: string | null;
+  customer_email: string | null;
   summary: string;
   follow_up_at: number;
 };
 
+type OverdueTodo = {
+  id: number;
+  title: string;
+  due_date: number;
+  customer_id: number | null;
+  customer_name: string | null;
+};
+
+type RecentInteraction = {
+  id: number;
+  customer_id: number | null;
+  customer_name: string | null;
+  customer_company: string | null;
+  customer_phone: string | null;
+  customer_email: string | null;
+  kind: InteractionKind;
+  summary: string;
+  status: "open" | "done";
+  created_at: number;
+  follow_up_at: number | null;
+};
+
+type WeekStats = {
+  customers: number;
+  interactions: number;
+  notes: number;
+  todos_done: number;
+};
+
+const KIND_ICONS: Record<InteractionKind, typeof Phone> = {
+  call: Phone,
+  email: Mail,
+  sms: MessageSquare,
+  meeting: Users,
+  other: MessageSquare,
+};
+
+function formatDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleString("pl-PL", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatDueDate(ts: number): string {
+  return new Date(ts * 1000).toLocaleDateString("pl-PL", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+}
+
 export function Dashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [followUps, setFollowUps] = useState<FollowUp[]>([]);
-  const [backupStatus, setBackupStatus] = useState<BackupStatus | null>(null);
+  const [overdueTodos, setOverdueTodos] = useState<OverdueTodo[]>([]);
+  const [recent, setRecent] = useState<RecentInteraction[]>([]);
+  const [thisWeek, setThisWeek] = useState<WeekStats | null>(null);
+  const [lastWeek, setLastWeek] = useState<WeekStats | null>(null);
 
   async function refresh() {
     const conn = await db();
@@ -76,9 +129,16 @@ export function Dashboard() {
       open_todos: t.n,
       open_interactions: i.n,
     });
+
+    // Upcoming follow-ups (open interactions with date set)
     setFollowUps(
       await conn.select<FollowUp[]>(
-        `SELECT i.id, i.customer_id, c.name as customer_name, i.summary, i.follow_up_at
+        `SELECT i.id, i.customer_id,
+                c.name as customer_name,
+                c.company as customer_company,
+                c.phone as customer_phone,
+                c.email as customer_email,
+                i.summary, i.follow_up_at
          FROM interactions i
          LEFT JOIN customers c ON c.id = i.customer_id
          WHERE i.status = 'open' AND i.follow_up_at IS NOT NULL
@@ -86,22 +146,102 @@ export function Dashboard() {
          LIMIT 10`,
       ),
     );
-  }
 
-  async function refreshBackupStatus() {
-    setBackupStatus(await getBackupStatus());
+    // Overdue todos
+    const nowSec = Math.floor(Date.now() / 1000);
+    const todayStartSec = Math.floor(
+      new Date(new Date().setHours(0, 0, 0, 0)).getTime() / 1000,
+    );
+    setOverdueTodos(
+      await conn.select<OverdueTodo[]>(
+        `SELECT t.id, t.title, t.due_date, t.customer_id,
+                c.name as customer_name
+         FROM todos t
+         LEFT JOIN customers c ON c.id = t.customer_id
+         WHERE t.done = 0 AND t.due_date IS NOT NULL AND t.due_date < ?
+         ORDER BY t.due_date ASC
+         LIMIT 20`,
+        [todayStartSec],
+      ),
+    );
+
+    // Recent open interactions (newest first)
+    setRecent(
+      await conn.select<RecentInteraction[]>(
+        `SELECT i.id, i.customer_id,
+                c.name as customer_name,
+                c.company as customer_company,
+                c.phone as customer_phone,
+                c.email as customer_email,
+                i.kind, i.summary, i.status, i.created_at, i.follow_up_at
+         FROM interactions i
+         LEFT JOIN customers c ON c.id = i.customer_id
+         WHERE i.status = 'open'
+         ORDER BY i.created_at DESC
+         LIMIT 8`,
+      ),
+    );
+
+    // Weekly stats (last 7 days vs previous 7 days)
+    const week = 7 * 86400;
+    const sevenAgo = nowSec - week;
+    const fourteenAgo = nowSec - 2 * week;
+    const countSince = async (
+      table: string,
+      tsCol: string,
+      since: number,
+      until?: number,
+      extraWhere = "",
+    ) => {
+      const sql = until
+        ? `SELECT COUNT(*) as n FROM ${table} WHERE ${tsCol} >= ? AND ${tsCol} < ? ${extraWhere}`
+        : `SELECT COUNT(*) as n FROM ${table} WHERE ${tsCol} >= ? ${extraWhere}`;
+      const params: number[] = until ? [since, until] : [since];
+      const [r] = await conn.select<{ n: number }[]>(sql, params);
+      return r?.n ?? 0;
+    };
+    setThisWeek({
+      customers: await countSince("customers", "created_at", sevenAgo),
+      interactions: await countSince("interactions", "created_at", sevenAgo),
+      notes: await countSince("notes", "created_at", sevenAgo),
+      todos_done: await countSince(
+        "todos",
+        "created_at",
+        sevenAgo,
+        undefined,
+        "AND done = 1",
+      ),
+    });
+    setLastWeek({
+      customers: await countSince(
+        "customers",
+        "created_at",
+        fourteenAgo,
+        sevenAgo,
+      ),
+      interactions: await countSince(
+        "interactions",
+        "created_at",
+        fourteenAgo,
+        sevenAgo,
+      ),
+      notes: await countSince("notes", "created_at", fourteenAgo, sevenAgo),
+      todos_done: await countSince(
+        "todos",
+        "created_at",
+        fourteenAgo,
+        sevenAgo,
+        "AND done = 1",
+      ),
+    });
   }
 
   useEffect(() => {
     refresh();
-    refreshBackupStatus();
-    // Try daily auto-backup once per app start.
+    // Once-per-day silent backup on app open (no UI noise).
     (async () => {
       const r = await runDailyBackupIfNeeded();
-      if (r.ran) {
-        toast.success("Auto-backup wykonany");
-        await refreshBackupStatus();
-      }
+      if (r.ran) toast.success("Auto-backup wykonany");
     })();
   }, []);
 
@@ -129,82 +269,6 @@ export function Dashboard() {
     await clearAllData();
     toast.success("Dane wyczyszczone");
     await refresh();
-  }
-
-  async function handleExport() {
-    try {
-      const { filename, totalRows } = await downloadBackup();
-      toast.success(`Backup zapisany: ${filename} (${totalRows} wierszy)`);
-    } catch (e) {
-      toast.error(`Błąd eksportu: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function handlePickFolder() {
-    try {
-      const folder = await pickBackupFolder();
-      if (folder) {
-        toast.success(`Folder backupu ustawiony: ${folder}`);
-        await refreshBackupStatus();
-      }
-    } catch (e) {
-      toast.error(`Błąd: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function handleClearFolder() {
-    if (!window.confirm("Wyłączyć auto-backup? (możesz włączyć ponownie)")) return;
-    await clearBackupFolder();
-    toast.success("Auto-backup wyłączony");
-    await refreshBackupStatus();
-  }
-
-  async function handleBackupNow() {
-    try {
-      const { path } = await writeBackupToFolder();
-      toast.success(`Backup zapisany: ${path}`);
-      await refreshBackupStatus();
-    } catch (e) {
-      toast.error(`Błąd: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  async function handleImport(file: File) {
-    try {
-      const counts = await getCurrentRowCounts();
-      const totalNow = Object.values(counts).reduce((a, b) => a + b, 0);
-      const parsed = await readBackupFile(file);
-      const detailLines = Object.entries(counts)
-        .filter(([, n]) => n > 0)
-        .map(
-          ([t, n]) =>
-            `  • ${TABLE_LABELS_PL[t as keyof typeof TABLE_LABELS_PL]}: ${n}`,
-        )
-        .join("\n");
-      if (
-        !window.confirm(
-          `Importuję backup z pliku „${file.name}”.\n\n` +
-            `UWAGA: wszystkie obecne dane (${totalNow} wierszy) zostaną NADPISANE:\n` +
-            (detailLines || "  • baza pusta") +
-            `\n\nKontynuować?`,
-        )
-      ) {
-        return;
-      }
-      const summary = await importBackup(parsed);
-      const total = Object.values(summary.inserted).reduce((a, b) => a + b, 0);
-      toast.success(`Przywrócono ${total} wierszy z backupu`);
-      if (summary.skippedTables.length > 0) {
-        toast.info(
-          `Pominięte tabele (nieznane w tej wersji): ${summary.skippedTables.join(", ")}`,
-        );
-      }
-      await refresh();
-      // Force full reload so other pages pick up the new IDs / linked entities.
-      setTimeout(() => window.location.reload(), 800);
-    } catch (e) {
-      toast.error(`Błąd importu: ${e instanceof Error ? e.message : String(e)}`);
-    }
   }
 
   const tiles: {
@@ -240,6 +304,14 @@ export function Dashboard() {
   ];
 
   const isEmpty = stats?.customers === 0 && stats?.products === 0;
+  const overdueFollowUps = useMemo(
+    () => followUps.filter((f) => f.follow_up_at * 1000 < Date.now()),
+    [followUps],
+  );
+  const upcomingFollowUps = useMemo(
+    () => followUps.filter((f) => f.follow_up_at * 1000 >= Date.now()),
+    [followUps],
+  );
 
   return (
     <>
@@ -248,28 +320,6 @@ export function Dashboard() {
         description="Krótki przegląd: klienci, produkty, oczekujące sprawy."
         action={
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={handleExport}>
-              <Download className="h-4 w-4" />
-              Pełny backup
-            </Button>
-            <label>
-              <input
-                type="file"
-                accept=".json,application/json"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) handleImport(f);
-                  e.currentTarget.value = "";
-                }}
-              />
-              <Button variant="outline" size="sm" asChild>
-                <span className="cursor-pointer">
-                  <Upload className="h-4 w-4" />
-                  Przywróć backup
-                </span>
-              </Button>
-            </label>
             {isEmpty && (
               <Button onClick={loadSeed}>
                 <Sparkles className="h-4 w-4" />
@@ -286,6 +336,7 @@ export function Dashboard() {
         }
       />
       <div className="p-6 space-y-6">
+        {/* Top stats */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {tiles.map(({ label, value, icon: Icon, to }) => (
             <Link key={label} to={to}>
@@ -306,21 +357,165 @@ export function Dashboard() {
           ))}
         </div>
 
-        {followUps.length > 0 && (
-          <Card>
+        {/* OVERDUE banner — only if there's actually something past deadline */}
+        {(overdueTodos.length > 0 || overdueFollowUps.length > 0) && (
+          <Card className="border-red-500/50 bg-red-500/5">
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <CalendarClock className="h-4 w-4" />
-                Nadchodzące follow-upy
+              <CardTitle className="text-base flex items-center gap-2 text-red-600 dark:text-red-400">
+                <AlertTriangle className="h-4 w-4" />
+                Po terminie ({overdueTodos.length + overdueFollowUps.length})
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {followUps.map((f) => {
-                const overdue = f.follow_up_at * 1000 < Date.now();
-                return (
+              {overdueFollowUps.map((f) => (
+                <Link
+                  key={`fu-${f.id}`}
+                  to={
+                    f.customer_id
+                      ? `/customers/${f.customer_id}`
+                      : "/interactions"
+                  }
+                  className="block rounded-md border border-red-500/30 bg-background p-3 hover:bg-muted/40 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs text-red-600 dark:text-red-400 font-medium uppercase tracking-wide">
+                        Follow-up
+                      </div>
+                      <div className="font-medium text-sm truncate">
+                        {f.summary}
+                      </div>
+                      {f.customer_id && (
+                        <div className="text-xs text-muted-foreground truncate">
+                          {customerDisplayName({
+                            id: f.customer_id,
+                            name: f.customer_name,
+                            company: f.customer_company,
+                            phone: f.customer_phone,
+                            email: f.customer_email,
+                          })}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs tabular-nums text-red-600 dark:text-red-400 whitespace-nowrap">
+                      {formatDueDate(f.follow_up_at)}
+                    </div>
+                  </div>
+                </Link>
+              ))}
+              {overdueTodos.map((t) => (
+                <Link
+                  key={`td-${t.id}`}
+                  to={
+                    t.customer_id
+                      ? `/customers/${t.customer_id}`
+                      : "/todos"
+                  }
+                  className="block rounded-md border border-red-500/30 bg-background p-3 hover:bg-muted/40 transition-colors"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-xs text-red-600 dark:text-red-400 font-medium uppercase tracking-wide">
+                        Zadanie
+                      </div>
+                      <div className="font-medium text-sm truncate">
+                        {t.title}
+                      </div>
+                      {t.customer_id && t.customer_name && (
+                        <div className="text-xs text-muted-foreground truncate">
+                          {t.customer_name}
+                        </div>
+                      )}
+                    </div>
+                    <div className="text-xs tabular-nums text-red-600 dark:text-red-400 whitespace-nowrap">
+                      {formatDueDate(t.due_date)}
+                    </div>
+                  </div>
+                </Link>
+              ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Two columns: Latest interactions + Upcoming follow-ups */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {recent.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <Phone className="h-4 w-4" />
+                  Najnowsze sprawy
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {recent.map((r) => {
+                  const Icon = KIND_ICONS[r.kind];
+                  return (
+                    <Link
+                      key={r.id}
+                      to={
+                        r.customer_id
+                          ? `/customers/${r.customer_id}`
+                          : "/interactions"
+                      }
+                      className="block rounded-md border p-3 hover:bg-muted/40 transition-colors"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                            <Circle className="h-3 w-3" />
+                            <Icon className="h-3 w-3" />
+                            <span>{INTERACTION_KIND_LABELS[r.kind]}</span>
+                          </div>
+                          <div className="font-medium text-sm truncate mt-0.5">
+                            {r.summary}
+                          </div>
+                          {r.customer_id && (
+                            <div className="text-xs text-muted-foreground truncate">
+                              {customerDisplayName({
+                                id: r.customer_id,
+                                name: r.customer_name,
+                                company: r.customer_company,
+                                phone: r.customer_phone,
+                                email: r.customer_email,
+                              })}
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground tabular-nums shrink-0">
+                          {formatDate(r.created_at)}
+                        </div>
+                      </div>
+                    </Link>
+                  );
+                })}
+                <Link
+                  to="/interactions?filter=open"
+                  className="block text-xs text-center text-muted-foreground hover:text-foreground pt-2 border-t"
+                >
+                  Wszystkie otwarte sprawy →
+                </Link>
+              </CardContent>
+            </Card>
+          )}
+
+          {upcomingFollowUps.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <CalendarClock className="h-4 w-4" />
+                  Nadchodzące follow-upy
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {upcomingFollowUps.map((f) => (
                   <Link
                     key={f.id}
-                    to={f.customer_id ? `/customers/${f.customer_id}` : "/customers"}
+                    to={
+                      f.customer_id
+                        ? `/customers/${f.customer_id}`
+                        : "/customers"
+                    }
                     className="block rounded-md border p-3 hover:bg-muted/40 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">
@@ -328,26 +523,24 @@ export function Dashboard() {
                         <div className="font-medium text-sm truncate">
                           {f.summary}
                         </div>
-                        {f.customer_name && (
+                        {f.customer_id && (
                           <div className="text-xs text-muted-foreground truncate">
-                            {f.customer_name}
+                            {customerDisplayName({
+                              id: f.customer_id,
+                              name: f.customer_name,
+                              company: f.customer_company,
+                              phone: f.customer_phone,
+                              email: f.customer_email,
+                            })}
                           </div>
                         )}
                       </div>
-                      <div
-                        className={cn(
-                          "text-xs tabular-nums whitespace-nowrap px-2 py-0.5 rounded",
-                          overdue
-                            ? "bg-red-500/10 text-red-600 dark:text-red-400"
-                            : "bg-amber-500/10 text-amber-700 dark:text-amber-400",
-                        )}
-                      >
+                      <div className="text-xs tabular-nums whitespace-nowrap px-2 py-0.5 rounded bg-amber-500/10 text-amber-700 dark:text-amber-400">
                         {new Date(f.follow_up_at * 1000).toLocaleString(
                           "pl-PL",
                           {
                             day: "2-digit",
                             month: "2-digit",
-                            year: "numeric",
                             hour: "2-digit",
                             minute: "2-digit",
                           },
@@ -355,79 +548,47 @@ export function Dashboard() {
                       </div>
                     </div>
                   </Link>
-                );
-              })}
-            </CardContent>
-          </Card>
-        )}
+                ))}
+              </CardContent>
+            </Card>
+          )}
+        </div>
 
-        {backupStatus && (
+        {/* Weekly stats — last 7 days vs previous 7 days */}
+        {thisWeek && lastWeek && (
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4" />
-                Auto-backup
+                <TrendingUp className="h-4 w-4" />
+                Statystyki tygodnia
               </CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              {backupStatus.folder ? (
-                <>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                    <span className="text-muted-foreground">Folder:</span>
-                    <code className="text-xs bg-muted px-2 py-0.5 rounded break-all">
-                      {backupStatus.folder}
-                    </code>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-                    <span>
-                      Ostatni backup:{" "}
-                      <span className="text-foreground font-medium">
-                        {formatRelative(backupStatus.lastBackupAt)}
-                      </span>
-                    </span>
-                    <span>
-                      Zapisów od backupu:{" "}
-                      <span className="text-foreground font-medium tabular-nums">
-                        {backupStatus.writesSinceBackup}
-                      </span>{" "}
-                      / 50
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    <Button size="sm" onClick={handleBackupNow}>
-                      <Download className="h-3.5 w-3.5" />
-                      Backup teraz
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handlePickFolder}
-                    >
-                      <FolderCog className="h-3.5 w-3.5" />
-                      Zmień folder
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={handleClearFolder}
-                    >
-                      Wyłącz
-                    </Button>
-                  </div>
-                </>
-              ) : (
-                <>
-                  <p className="text-muted-foreground">
-                    Auto-backup nie jest skonfigurowany. Wybierz folder (np.
-                    OneDrive / Dropbox) — kopia zapisze się automatycznie co
-                    50 zapisów oraz raz dziennie przy starcie aplikacji.
-                  </p>
-                  <Button size="sm" onClick={handlePickFolder}>
-                    <FolderCog className="h-3.5 w-3.5" />
-                    Wybierz folder backupu
-                  </Button>
-                </>
-              )}
+            <CardContent>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <WeekStat
+                  label="Nowi klienci"
+                  now={thisWeek.customers}
+                  prev={lastWeek.customers}
+                />
+                <WeekStat
+                  label="Sprawy"
+                  now={thisWeek.interactions}
+                  prev={lastWeek.interactions}
+                />
+                <WeekStat
+                  label="Notatki"
+                  now={thisWeek.notes}
+                  prev={lastWeek.notes}
+                />
+                <WeekStat
+                  label="Zadania (zamknięte)"
+                  now={thisWeek.todos_done}
+                  prev={lastWeek.todos_done}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground pt-3 mt-3 border-t">
+                Ostatnie 7 dni vs poprzednie 7 dni
+              </p>
             </CardContent>
           </Card>
         )}
@@ -451,5 +612,41 @@ export function Dashboard() {
         )}
       </div>
     </>
+  );
+}
+
+/** Single statistic card: big number now + delta vs previous period. */
+function WeekStat({
+  label,
+  now,
+  prev,
+}: {
+  label: string;
+  now: number;
+  prev: number;
+}) {
+  const delta = now - prev;
+  const Icon = delta > 0 ? TrendingUp : delta < 0 ? TrendingDown : Minus;
+  const color =
+    delta > 0
+      ? "text-emerald-600 dark:text-emerald-400"
+      : delta < 0
+        ? "text-red-600 dark:text-red-400"
+        : "text-muted-foreground";
+  return (
+    <div className="space-y-1">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-2xl font-semibold tabular-nums">{now}</span>
+        <span className={cn("text-xs flex items-center gap-0.5", color)}>
+          <Icon className="h-3 w-3" />
+          {delta > 0 ? "+" : ""}
+          {delta}
+        </span>
+      </div>
+      <div className="text-[11px] text-muted-foreground tabular-nums">
+        poprzedni: {prev}
+      </div>
+    </div>
   );
 }

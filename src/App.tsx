@@ -12,6 +12,7 @@ import { Notes } from "@/pages/Notes";
 import { Templates } from "@/pages/Templates";
 import { Interactions } from "@/pages/Interactions";
 import { InteractionTemplates } from "@/pages/InteractionTemplates";
+import { Settings } from "@/pages/Settings";
 
 export default function App() {
   return (
@@ -29,6 +30,7 @@ export default function App() {
           <Route path="templates" element={<Templates />} />
           <Route path="interactions" element={<Interactions />} />
           <Route path="interaction-templates" element={<InteractionTemplates />} />
+          <Route path="settings" element={<Settings />} />
         </Route>
       </Routes>
     </PasswordGate>
